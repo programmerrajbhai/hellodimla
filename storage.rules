@@ -1,0 +1,41 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function owner(uid, orderId) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && firestore.get(
+          /databases/(default)/documents/orders/$(orderId)
+        ).data.ownerUid == uid;
+    }
+
+    match /store_images/{path=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /order_issue_images/{uid}/{orderId}/{issueId}/photo {
+      allow read: if owner(uid, orderId);
+
+      allow create: if owner(uid, orderId)
+        && !firestore.exists(
+          /databases/(default)/documents/orders/$(orderId)/issues/$(issueId)
+        )
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+
+      allow update: if false;
+
+      allow delete: if owner(uid, orderId)
+        && !firestore.exists(
+          /databases/(default)/documents/orders/$(orderId)/issues/$(issueId)
+        );
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

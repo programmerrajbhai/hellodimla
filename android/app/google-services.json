@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "556147209906",
+    "project_id": "hello-dimla-dev",
+    "storage_bucket": "hello-dimla-dev.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:556147209906:android:806fdcdb6ec98c31df7bab",
+        "android_client_info": {
+          "package_name": "com.novatech.hellodimla"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAkBEoNd04ZoFRRmP--_7qb9KEwVSK-9zU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

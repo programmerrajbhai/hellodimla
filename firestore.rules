@@ -1,0 +1,456 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function own(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function text(v, lo, hi) {
+      return v is string && v.size() >= lo && v.size() <= hi;
+    }
+
+    function token(v) {
+      return v is string && v.matches('^[a-zA-Z0-9_-]{1,128}$');
+    }
+
+    function attemptId(v) {
+      return v is string && v.matches('^[a-f0-9]{24}$');
+    }
+
+    function store() {
+      return get(
+        /databases/$(database)/documents/app_config/store
+      ).data;
+    }
+
+    function orderOwner(id) {
+      return signedIn()
+        && get(
+          /databases/$(database)/documents/orders/$(id)
+        ).data.ownerUid == request.auth.uid;
+    }
+
+    function demoStore() {
+      return {
+        'enabled': true,
+        'demoMode': true,
+        'name': 'Hello Store',
+        'bannerTitle': 'পরীক্ষামূলক কেনাকাটা',
+        'bannerSubtitle': 'DEMO • বাস্তব বিক্রি বা delivery নয়।',
+        'supportPhone': '',
+        'policyVersion': 'free-demo-1',
+        'returnWindowDays': 7,
+        'deliveryPolicy': 'অর্ডার জমা হলে দোকান stock ও delivery যাচাই করে confirm করবে। Demo order বাস্তব delivery নয়।',
+        'returnPolicy': 'Delivered হওয়ার ৭ দিনের মধ্যে ফেরতের আবেদন। অনুমোদন ও refund আলাদা।',
+        'deliveryZones': [
+          {
+            'id': 'dimla_test',
+            'label': 'ডিমলা — পরীক্ষা এলাকা',
+            'enabled': true,
+            'chargeMinor': 4000,
+            'minSubtotalMinor': 0,
+            'maxSubtotalMinor': 10000000
+          }
+        ]
+      };
+    }
+
+    function demoProduct(id) {
+      return {
+        'name': id == 'demo_rice' ? 'ডেমো চাল' : 'ডেমো চা',
+        'categoryId': 'grocery',
+        'categoryName': 'মুদি',
+        'unit': id == 'demo_rice'
+          ? '১ কেজি প্যাকেট'
+          : '১০০ গ্রাম প্যাকেট',
+        'priceMinor': id == 'demo_rice' ? 7500 : 12000,
+        'originalPriceMinor': 0,
+        'stockQty': 20,
+        'published': true,
+        'inStock': true,
+        'featured': true,
+        'demoMode': true,
+        'imageUrl': '',
+        'images': [],
+        'variants': [],
+        'description': 'শুধু app testing-এর ডেমো পণ্য।'
+      };
+    }
+
+    match /app_config/{id} {
+      allow read: if true;
+
+      allow create: if signedIn()
+        && id == 'store'
+        && request.resource.data == demoStore();
+
+      allow update, delete: if false;
+    }
+
+    match /products/{id} {
+      allow list: if resource.data.published == true;
+
+      allow get: if !exists(
+        /databases/$(database)/documents/products/$(id)
+      )
+        || id in ['demo_rice', 'demo_tea']
+        || resource.data.published == true;
+
+      allow create: if signedIn()
+        && id in ['demo_rice', 'demo_tea']
+        && getAfter(
+          /databases/$(database)/documents/app_config/store
+        ).data.demoMode == true
+        && request.resource.data == demoProduct(id);
+
+      allow update, delete: if false;
+    }
+
+    match /services/{id} {
+      allow read: if resource.data.published == true;
+      allow write: if false;
+    }
+
+    match /updates/{id} {
+      allow read: if resource.data.published == true;
+      allow write: if false;
+    }
+
+    match /locations/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    function validLine(line, key, demo) {
+      let p = get(
+        /databases/$(database)/documents/products/$(line.productId)
+      ).data;
+
+      let variants = p.get('variants', []);
+      let index = line.variantIndex;
+      let v = index == -1 ? p : variants[index];
+
+      return line.keys().hasOnly([
+          'productId', 'variantId', 'name', 'variantName',
+          'unit', 'imageUrl', 'qty', 'priceMinor',
+          'variantIndex', 'subtotalMinor'
+        ])
+        && p.published == true
+        && (demo || p.get('demoMode', false) != true)
+        && index is int
+        && line.qty is int
+        && line.qty >= 1
+        && line.qty <= 99
+        && (
+          (index == -1
+            && variants.size() == 0
+            && line.variantId == '')
+          || (index >= 0
+            && index < variants.size()
+            && v.id == line.variantId)
+        )
+        && key == line.productId + ':' + line.variantId
+        && v.get('inStock', true) == true
+        && v.get('published', true) == true
+        && v.stockQty is int
+        && v.stockQty >= line.qty
+        && v.priceMinor is int
+        && v.priceMinor > 0
+        && v.priceMinor <= 10000000
+        && line.priceMinor == v.priceMinor
+        && line.subtotalMinor == line.qty * v.priceMinor
+        && line.name == p.name
+        && line.unit == v.get('unit', p.get('unit', 'পিস'))
+        && line.variantName == (
+          index == -1 ? '' : v.get('name', '')
+        )
+        && text(line.imageUrl, 0, 2048)
+        && (
+          line.imageUrl == ''
+          || line.imageUrl.matches('^https://.*')
+        );
+    }
+
+    function linesValid(id, d) {
+      let n = d.lines.size();
+
+      return n >= 1
+        && n <= 5
+        && d.lineKeys.size() == n
+        && d.lineKeys.toSet().size() == n
+        && getAfter(
+          /databases/$(database)/documents/orders/$(id)/items/0
+        ).data == d.lines[0]
+        && (
+          n < 2 || getAfter(
+            /databases/$(database)/documents/orders/$(id)/items/1
+          ).data == d.lines[1]
+        )
+        && (
+          n < 3 || getAfter(
+            /databases/$(database)/documents/orders/$(id)/items/2
+          ).data == d.lines[2]
+        )
+        && (
+          n < 4 || getAfter(
+            /databases/$(database)/documents/orders/$(id)/items/3
+          ).data == d.lines[3]
+        )
+        && (
+          n < 5 || getAfter(
+            /databases/$(database)/documents/orders/$(id)/items/4
+          ).data == d.lines[4]
+        );
+    }
+
+    function sum(lines) {
+      return lines[0].subtotalMinor
+        + (lines.size() > 1 ? lines[1].subtotalMinor : 0)
+        + (lines.size() > 2 ? lines[2].subtotalMinor : 0)
+        + (lines.size() > 3 ? lines[3].subtotalMinor : 0)
+        + (lines.size() > 4 ? lines[4].subtotalMinor : 0);
+    }
+
+    function addressValid(a, cfg) {
+      return a.keys().hasOnly([
+          'name', 'phone', 'zoneId', 'zoneLabel',
+          'zoneIndex', 'address', 'landmark', 'note'
+        ])
+        && text(a.name, 2, 80)
+        && a.phone is string
+        && a.phone.matches('^01[3-9][0-9]{8}$')
+        && text(a.address, 8, 400)
+        && text(a.landmark, 0, 160)
+        && text(a.note, 0, 300)
+        && a.zoneIndex is int
+        && a.zoneIndex >= 0
+        && a.zoneIndex < cfg.deliveryZones.size()
+        && cfg.deliveryZones[a.zoneIndex].enabled == true
+        && a.zoneId == cfg.deliveryZones[a.zoneIndex].id
+        && a.zoneLabel == cfg.deliveryZones[a.zoneIndex].label;
+    }
+
+    function totalsValid(d, cfg) {
+      let zone = cfg.deliveryZones[d.address.zoneIndex];
+
+      return d.subtotalMinor is int
+        && d.subtotalMinor == sum(d.lines)
+        && d.subtotalMinor >= zone.minSubtotalMinor
+        && d.subtotalMinor <= zone.maxSubtotalMinor
+        && d.deliveryMinor is int
+        && d.deliveryMinor >= 0
+        && d.deliveryMinor == zone.chargeMinor
+        && d.discountMinor == 0
+        && d.totalMinor is int
+        && d.totalMinor == d.subtotalMinor + d.deliveryMinor
+        && d.totalMinor <= 100000000
+        && d.demoMode == cfg.demoMode
+        && d.deliveryPolicy == cfg.deliveryPolicy
+        && d.returnPolicy == cfg.returnPolicy
+        && d.policyVersion == cfg.policyVersion
+        && d.supportPhone == cfg.supportPhone
+        && d.returnWindowDays is int
+        && d.returnWindowDays >= 0
+        && d.returnWindowDays <= 90
+        && d.returnWindowDays == cfg.returnWindowDays;
+    }
+
+    function orderValid(id, d) {
+      let cfg = store();
+
+      return d.keys().hasOnly([
+          'ownerUid', 'requestId', 'orderNumber', 'intentHash',
+          'lineKeys', 'lines', 'address', 'subtotalMinor',
+          'deliveryMinor', 'discountMinor', 'totalMinor',
+          'demoMode', 'deliveryPolicy', 'returnPolicy',
+          'policyVersion', 'returnWindowDays', 'supportPhone',
+          'status', 'paymentMethod', 'paymentStatus',
+          'createdAt', 'updatedAt', 'statusHistory'
+        ])
+        && d.ownerUid == request.auth.uid
+        && attemptId(d.requestId)
+        && id == request.auth.uid + '_' + d.requestId
+        && d.orderNumber == 'HD-' + d.requestId
+        && text(d.intentHash, 1, 30000)
+        && d.lines is list
+        && d.lineKeys is list
+        && d.address is map
+        && cfg.enabled == true
+        && d.status == 'placed'
+        && d.paymentMethod == 'cod'
+        && d.paymentStatus == 'unpaid'
+        && d.createdAt == request.time
+        && d.updatedAt == request.time
+        && d.statusHistory == []
+        && addressValid(d.address, cfg)
+        && linesValid(id, d)
+        && totalsValid(d, cfg);
+    }
+
+    match /orders/{id} {
+      allow get: if signedIn()
+        && (
+          !exists(
+            /databases/$(database)/documents/orders/$(id)
+          )
+          || resource.data.get(
+            'ownerUid',
+            resource.data.get('attemptOwner', '')
+          ) == request.auth.uid
+        );
+
+      allow list: if signedIn()
+        && resource.data.ownerUid == request.auth.uid;
+
+      allow create: if signedIn()
+        && (
+          (
+            request.resource.data.status == 'abandoned'
+            && request.resource.data.keys().hasOnly([
+              'attemptOwner', 'requestId', 'status', 'createdAt'
+            ])
+            && request.resource.data.attemptOwner == request.auth.uid
+            && attemptId(request.resource.data.requestId)
+            && id == request.auth.uid + '_' + request.resource.data.requestId
+            && request.resource.data.createdAt == request.time
+          )
+          || (
+            request.resource.data.status == 'placed'
+            && orderValid(id, request.resource.data)
+          )
+        );
+
+      allow update: if signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && resource.data.status == 'placed'
+        && resource.data.paymentStatus == 'unpaid'
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'status', 'cancellationReason',
+            'cancelledAt', 'updatedAt'
+          ])
+        && text(request.resource.data.cancellationReason, 2, 300)
+        && request.resource.data.cancelledAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow delete: if false;
+
+      match /items/{itemId} {
+        function itemValid() {
+          let o = getAfter(
+            /databases/$(database)/documents/orders/$(id)
+          ).data;
+
+          let index = itemId == '0' ? 0
+            : itemId == '1' ? 1
+            : itemId == '2' ? 2
+            : itemId == '3' ? 3 : 4;
+
+          return itemId in ['0', '1', '2', '3', '4']
+            && !exists(
+              /databases/$(database)/documents/orders/$(id)
+            )
+            && o.ownerUid == request.auth.uid
+            && o.status == 'placed'
+            && index < o.lines.size()
+            && request.resource.data == o.lines[index]
+            && validLine(
+              request.resource.data,
+              o.lineKeys[index],
+              o.demoMode
+            );
+        }
+
+        allow read: if orderOwner(id);
+        allow create: if signedIn() && itemValid();
+        allow update, delete: if false;
+      }
+
+      match /issues/{issueId} {
+        function issueValid() {
+          let d = request.resource.data;
+          let o = get(
+            /databases/$(database)/documents/orders/$(id)
+          ).data;
+
+          return d.keys().hasOnly([
+              'ownerUid', 'orderId', 'requestId',
+              'type', 'reason', 'description',
+              'requestStatus', 'refundStatus',
+              'refundMinor', 'createdAt'
+            ])
+            && d.ownerUid == request.auth.uid
+            && d.orderId == id
+            && attemptId(issueId)
+            && d.requestId == issueId
+            && text(d.reason, 2, 120)
+            && text(d.description, 0, 2000)
+            && d.requestStatus == 'pending'
+            && d.refundStatus == 'not_requested'
+            && d.refundMinor == 0
+            && d.createdAt == request.time
+            && (
+              d.type == 'issue'
+              || (
+                d.type == 'return'
+                && o.status == 'delivered'
+                && o.deliveredAt is timestamp
+                && o.returnWindowDays is int
+                && request.time >= o.deliveredAt
+                && request.time <= o.deliveredAt
+                  + duration.value(o.returnWindowDays, 'd')
+              )
+            );
+        }
+
+        allow get, list: if orderOwner(id);
+        allow create: if orderOwner(id) && issueValid();
+        allow update, delete: if false;
+      }
+    }
+
+    match /users/{uid}/order_requests/{requestId} {
+      allow read: if own(uid);
+      allow write: if false;
+    }
+
+    match /users/{uid}/notifications/{id} {
+      allow read, delete: if own(uid);
+      allow create: if false;
+
+      allow update: if own(uid)
+        && request.resource.data.diff(resource.data)
+          .affectedKeys()
+          .hasOnly(['read', 'isRead', 'readAt']);
+    }
+
+    match /service_reports/{id} {
+      allow read, update, delete: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'reporterUid', 'serviceId',
+          'reason', 'description', 'createdAt'
+        ])
+        && (
+          request.resource.data.get('ownerUid', '') == request.auth.uid
+          || request.resource.data.get('reporterUid', '') == request.auth.uid
+        )
+        && token(request.resource.data.serviceId)
+        && text(request.resource.data.reason, 2, 120)
+        && text(request.resource.data.get('description', ''), 0, 2000)
+        && request.resource.data.createdAt == request.time;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
