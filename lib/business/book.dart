@@ -38,7 +38,8 @@ const deltaKeys = [
 ];
 
 String day(DateTime d) =>
-    '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
 
 String today() => day(DateTime.now());
 
@@ -73,19 +74,25 @@ int scaled(String text, int digits, {bool negative = false}) {
   final parts = s.replaceFirst(RegExp(r'^[+-]'), '').split('.');
 
   final result =
-      BigInt.parse(parts[0]) * BigInt.from(pow(10, digits).toInt()) +
+      BigInt.parse(parts[0]) *
+          BigInt.from(pow(10, digits).toInt()) +
           BigInt.parse(
-            (parts.length == 2 ? parts[1] : '').padRight(digits, '0'),
+            (parts.length == 2 ? parts[1] : '')
+                .padRight(digits, '0'),
           );
 
   need(result <= BigInt.from(100000000000), 'সংখ্যা অনেক বড়');
+
   return neg ? -result.toInt() : result.toInt();
 }
 
-String money(int n) => '৳${bn((n / 100).toStringAsFixed(2))}';
+String money(int n) =>
+    '৳${bn((n / 100).toStringAsFixed(2))}';
 
 String qtyText(int n) => bn(
-  (n / 1000).toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), ''),
+  (n / 1000)
+      .toStringAsFixed(3)
+      .replaceFirst(RegExp(r'\.?0+$'), ''),
 );
 
 int ratio(int total, int part, int whole) =>
@@ -95,11 +102,16 @@ int ratio(int total, int part, int whole) =>
         .toInt();
 
 BookRow copyRow(BookRow r) =>
-    Map<String, dynamic>.from(jsonDecode(jsonEncode(r)) as Map);
+    Map<String, dynamic>.from(
+      jsonDecode(jsonEncode(r)) as Map,
+    );
 
 String newId() => List.generate(
   16,
-      (_) => Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0'),
+      (_) => Random.secure()
+      .nextInt(256)
+      .toRadixString(16)
+      .padLeft(2, '0'),
 ).join();
 
 class Book {
@@ -116,9 +128,15 @@ class Book {
   final BookRow data;
 
   BookRow? get settings => data['settings'] as BookRow?;
-  List<BookRow> get contacts => (data['contacts'] as List).cast<BookRow>();
-  List<BookRow> get products => (data['products'] as List).cast<BookRow>();
-  List<BookRow> get entries => (data['entries'] as List).cast<BookRow>();
+
+  List<BookRow> get contacts =>
+      (data['contacts'] as List).cast<BookRow>();
+
+  List<BookRow> get products =>
+      (data['products'] as List).cast<BookRow>();
+
+  List<BookRow> get entries =>
+      (data['entries'] as List).cast<BookRow>();
 
   Book clone() => Book(copyRow(data));
 
@@ -136,12 +154,16 @@ class Book {
     String? productId,
     String? from,
     String? to,
-  }) => entries.where((e) {
-    return (contactId == null || e['contactId'] == contactId) &&
-        (productId == null || e['productId'] == productId) &&
-        (from == null || (e['date'] as String).compareTo(from) >= 0) &&
-        (to == null || (e['date'] as String).compareTo(to) <= 0);
-  }).toList();
+  }) {
+    return entries.where((e) {
+      return (contactId == null || e['contactId'] == contactId) &&
+          (productId == null || e['productId'] == productId) &&
+          (from == null ||
+              (e['date'] as String).compareTo(from) >= 0) &&
+          (to == null ||
+              (e['date'] as String).compareTo(to) <= 0);
+    }).toList();
+  }
 
   int balance(String id, {String? to}) {
     final c = contact(id);
@@ -201,7 +223,10 @@ class Book {
         (settings!['date'] as String).compareTo(to) > 0
         ? 0
         : (settings!['openingCash'] as int) +
-        all.fold<int>(0, (a, e) => a + (e['cash'] as int));
+        all.fold<int>(
+          0,
+              (a, e) => a + (e['cash'] as int),
+        );
 
     var receivable = 0;
     var payable = 0;
@@ -248,12 +273,18 @@ class Book {
     };
   }
 
-  void setup(String name, String type, String date, int cash) {
+  void setup(
+      String name,
+      String type,
+      String date,
+      int cash,
+      ) {
     need(settings == null, 'ব্যবসা ইতোমধ্যে তৈরি হয়েছে');
 
     text(name, 80);
     text(type, 60);
     validDate(date);
+
     need(cash >= 0, 'Opening cash ঋণাত্মক হতে পারে না');
 
     data['settings'] = {
@@ -281,7 +312,8 @@ class Book {
     final phone = englishDigits(c['phone'] ?? '');
 
     need(
-      phone.isEmpty || RegExp(r'^\+?[0-9]{7,15}$').hasMatch(phone),
+      phone.isEmpty ||
+          RegExp(r'^\+?[0-9]{7,15}$').hasMatch(phone),
       'ফোন নম্বর ঠিক করুন',
     );
 
@@ -290,15 +322,18 @@ class Book {
       'Opening balance ঠিক করুন',
     );
 
-    final index = contacts.indexWhere((r) => r['id'] == c['id']);
+    final index =
+    contacts.indexWhere((r) => r['id'] == c['id']);
 
     if (index >= 0) {
       final old = contacts[index];
 
       if (list(contactId: c['id']).isNotEmpty) {
         need(
-          c['role'] == old['role'] && c['opening'] == old['opening'],
-          'History থাকায় পরিচয় ও opening বদলানো যাবে না; adjustment লিখুন',
+          c['role'] == old['role'] &&
+              c['opening'] == old['opening'],
+          'History থাকায় পরিচয় ও opening বদলানো যাবে না; '
+              'adjustment লিখুন',
         );
       }
 
@@ -307,6 +342,7 @@ class Book {
     } else {
       c['date'] = today();
       c['archived'] = false;
+
       data['contacts'].add({...c, 'phone': phone});
     }
   }
@@ -326,11 +362,13 @@ class Book {
 
     need(
       p['openingValue'] == null ||
-          p['openingValue'] is int && p['openingValue'] >= 0,
+          p['openingValue'] is int &&
+              p['openingValue'] >= 0,
       'Opening stock value ঠিক করুন',
     );
 
-    final index = products.indexWhere((r) => r['id'] == p['id']);
+    final index =
+    products.indexWhere((r) => r['id'] == p['id']);
 
     if (index >= 0) {
       final old = products[index];
@@ -339,7 +377,8 @@ class Book {
         old['unit'] == p['unit'] &&
             old['openingQty'] == p['openingQty'] &&
             old['openingValue'] == p['openingValue'],
-        'Unit/opening stock অপরিবর্তিত রাখুন; stock adjustment ব্যবহার করুন',
+        'Unit/opening stock অপরিবর্তিত রাখুন; '
+            'stock adjustment ব্যবহার করুন',
       );
 
       p['date'] = old['date'];
@@ -357,6 +396,7 @@ class Book {
       String note,
       ) {
     need(settings != null, 'আগে ব্যবসা তৈরি করুন');
+
     validDate(date);
 
     need(
@@ -365,8 +405,10 @@ class Book {
     );
 
     need(
-      entries.isEmpty || date.compareTo(entries.last['date']) >= 0,
-      'শেষ entry-এর আগের তারিখ নয়; আগের হিসাব ঠিক করতে reversal দিন',
+      entries.isEmpty ||
+          date.compareTo(entries.last['date']) >= 0,
+      'শেষ entry-এর আগের তারিখ নয়; '
+          'আগের হিসাব ঠিক করতে reversal দিন',
     );
 
     text(note, 300, optional: true);
@@ -432,6 +474,7 @@ class Book {
 
     if (contactId != null) {
       c = contact(contactId);
+
       need(!c['archived'], 'Contact archived');
 
       e['contactId'] = contactId;
@@ -473,7 +516,8 @@ class Book {
       );
 
       need(
-        c == null || c['role'] == (sale ? 'customer' : 'supplier'),
+        c == null ||
+            c['role'] == (sale ? 'customer' : 'supplier'),
         'Contact-এর পরিচয় মেলেনি',
       );
 
@@ -488,15 +532,23 @@ class Book {
         need(units > 0, 'Quantity দিন');
 
         if (sale) {
-          need(units <= stockNow!['qty'], 'পর্যাপ্ত stock নেই');
+          need(
+            units <= stockNow!['qty'],
+            'পর্যাপ্ত stock নেই',
+          );
 
           cost = stockNow['value'] == null
               ? null
-              : ratio(stockNow['value'], units, stockNow['qty']);
+              : ratio(
+            stockNow['value'],
+            units,
+            stockNow['qty'],
+          );
         }
 
         e['qty'] = sale ? -units : units;
-        e['value'] = cost == null ? null : (sale ? -cost : cost);
+        e['value'] =
+        cost == null ? null : (sale ? -cost : cost);
       }
 
       need(cost == null || cost >= 0, 'Cost ঋণাত্মক নয়');
@@ -530,32 +582,48 @@ class Book {
       e[receive ? 'collect' : 'pay'] = amount;
     } else if (type == 'credit_settle') {
       need(
-        c != null && amount > 0 && amount <= -balance(contactId!),
+        c != null &&
+            amount > 0 &&
+            amount <= -balance(contactId!),
         'Credit / অগ্রিম balance অনুযায়ী টাকা দিন',
       );
 
-      e['cash'] = c!['role'] == 'customer' ? -amount : amount;
+      e['cash'] = c!['role'] == 'customer'
+          ? -amount
+          : amount;
+
       e['balance'] = amount;
     } else if (type == 'balance') {
       need(
-        c != null && amount != 0 && note.trim().isNotEmpty,
+        c != null &&
+            amount != 0 &&
+            note.trim().isNotEmpty,
         'Contact, signed টাকা এবং কারণ দিন',
       );
 
       e['balance'] = amount;
     } else if (type == 'adjust') {
       need(
-        p != null && units != 0 && note.trim().isNotEmpty,
+        p != null &&
+            units != 0 &&
+            note.trim().isNotEmpty,
         'পণ্য, signed quantity এবং কারণ দিন',
       );
 
-      need(stockNow!['qty'] + units >= 0, 'Stock ঋণাত্মক হবে');
+      need(
+        stockNow!['qty'] + units >= 0,
+        'Stock ঋণাত্মক হবে',
+      );
 
       final int? value = units > 0
           ? manualCost
           : stockNow['value'] == null
           ? null
-          : ratio(stockNow['value'], -units, stockNow['qty']);
+          : ratio(
+        stockNow['value'],
+        -units,
+        stockNow['qty'],
+      );
 
       need(
         units < 0 || value != null && value >= 0,
@@ -563,6 +631,7 @@ class Book {
       );
 
       e['qty'] = units;
+
       e['value'] = value == null
           ? null
           : units > 0
@@ -608,9 +677,8 @@ class Book {
       ) {
     if (entries.any((r) => r['id'] == id)) return;
 
-    final original = entries.firstWhere(
-          (r) => r['id'] == originalId,
-    );
+    final original =
+    entries.firstWhere((r) => r['id'] == originalId);
 
     need(
       ['sale', 'purchase'].contains(original['type']) &&
@@ -619,7 +687,8 @@ class Book {
     );
 
     final prior = entries.where((r) {
-      return r['returnOf'] == originalId && !reversed(r['id']);
+      return r['returnOf'] == originalId &&
+          !reversed(r['id']);
     }).toList();
 
     final totalUnits = original['productId'] == null
@@ -642,7 +711,11 @@ class Book {
     );
 
     final amount =
-        ratio(original['amount'], done + units, totalUnits) -
+        ratio(
+          original['amount'],
+          done + units,
+          totalUnits,
+        ) -
             returnedAmount;
 
     need(
@@ -689,10 +762,15 @@ class Book {
 
       final cost = original['unknown'] == 1
           ? null
-          : ratio(original['cost'], done + units, totalUnits) -
+          : ratio(
+        original['cost'],
+        done + units,
+        totalUnits,
+      ) -
           oldCost;
 
       e['cost'] = -(cost ?? 0);
+      e['unknown'] = cost == null ? 1 : 0;
 
       if (original['productId'] != null) {
         e['qty'] = units;
@@ -703,8 +781,33 @@ class Book {
       e['purchaseReturn'] = amount;
 
       if (original['productId'] != null) {
+        final current = stock(original['productId']);
+
+        need(
+          units <= current['qty'],
+          'ফেরত দেওয়ার পর্যাপ্ত stock নেই',
+        );
+
+        final int? carryingValue =
+        current['value'] == null
+            ? null
+            : ratio(
+          current['value'],
+          units,
+          current['qty'],
+        );
+
         e['qty'] = -units;
-        e['value'] = -amount;
+
+        e['value'] =
+        carryingValue == null ? null : -carryingValue;
+
+        // Invoice/carrying-value difference adjusts cost of sales.
+        e['cost'] = carryingValue == null
+            ? 0
+            : carryingValue - amount;
+
+        e['unknown'] = carryingValue == null ? 1 : 0;
       }
     }
 
@@ -727,18 +830,19 @@ class Book {
       ) {
     if (entries.any((r) => r['id'] == id)) return;
 
-    final original = entries.firstWhere(
-          (r) => r['id'] == originalId,
-    );
+    final original =
+    entries.firstWhere((r) => r['id'] == originalId);
 
     need(
-      original['type'] != 'reversal' && !reversed(originalId),
+      original['type'] != 'reversal' &&
+          !reversed(originalId),
       'ইতোমধ্যে reversed বা reversal entry',
     );
 
     need(
       !entries.any((r) {
-        return r['returnOf'] == originalId && !reversed(r['id']);
+        return r['returnOf'] == originalId &&
+            !reversed(r['id']);
       }),
       'আগে সংশ্লিষ্ট ফেরত reverse করুন',
     );
@@ -753,8 +857,10 @@ class Book {
       }).toList();
 
       need(
-        active.isNotEmpty && active.last['id'] == originalId,
-        'পুরোনো stock entry বদলাতে ওই পণ্যের পরবর্তী movement আগে reverse করুন',
+        active.isNotEmpty &&
+            active.last['id'] == originalId,
+        'পুরোনো stock entry বদলাতে ওই পণ্যের '
+            'পরবর্তী movement আগে reverse করুন',
       );
     }
 
@@ -796,7 +902,8 @@ class Book {
   void archiveContact(String id) {
     final c = contact(id);
 
-    if (list(contactId: id).isEmpty && c['opening'] == 0) {
+    if (list(contactId: id).isEmpty &&
+        c['opening'] == 0) {
       data['contacts'].removeWhere((r) => r['id'] == id);
     } else {
       c['archived'] = !c['archived'];
@@ -820,7 +927,9 @@ class Book {
     final d = DateTime.tryParse(s);
 
     need(
-      d != null && day(d) == s && s.compareTo(today()) <= 0,
+      d != null &&
+          day(d) == s &&
+          s.compareTo(today()) <= 0,
       'তারিখ ঠিক করুন; ভবিষ্যৎ তারিখ নয়',
     );
   }
@@ -855,7 +964,9 @@ class Book {
 
     if (settings == null) {
       need(
-        contacts.isEmpty && products.isEmpty && entries.isEmpty,
+        contacts.isEmpty &&
+            products.isEmpty &&
+            entries.isEmpty,
         'Setup ছাড়া হিসাব নয়',
       );
       return;
@@ -891,7 +1002,10 @@ class Book {
     final ids = <String>{};
 
     for (final c in contacts) {
-      need(c['id'] is String && ids.add(c['id']), 'Duplicate contact');
+      need(
+        c['id'] is String && ids.add(c['id']),
+        'Duplicate contact',
+      );
 
       text(c['name'], 80);
       text(c['phone'], 16, optional: true);
@@ -911,7 +1025,10 @@ class Book {
     ids.clear();
 
     for (final p in products) {
-      need(p['id'] is String && ids.add(p['id']), 'Duplicate product');
+      need(
+        p['id'] is String && ids.add(p['id']),
+        'Duplicate product',
+      );
 
       text(p['name'], 80);
       text(p['unit'], 20);
@@ -925,7 +1042,8 @@ class Book {
 
       need(
         p['openingValue'] == null ||
-            p['openingValue'] is int && p['openingValue'] >= 0,
+            p['openingValue'] is int &&
+                p['openingValue'] >= 0,
         'Stock value ভুল',
       );
 
@@ -933,6 +1051,7 @@ class Book {
     }
 
     ids.clear();
+
     String previous = settings!['date'];
 
     for (final e in entries) {
@@ -963,13 +1082,19 @@ class Book {
       }
 
       need(
-        e['unknown'] is int && (e['unknown'] as int).abs() <= 1,
+        e['unknown'] is int &&
+            (e['unknown'] as int).abs() <= 1,
         'Cost flag ভুল',
       );
 
       text(e['note'], 300, optional: true);
 
-      for (final key in [...deltaKeys, 'amount', 'units', 'paid']) {
+      for (final key in [
+        ...deltaKeys,
+        'amount',
+        'units',
+        'paid',
+      ]) {
         need(
           key == 'value' && e[key] == null ||
               e[key] is int &&

@@ -8,8 +8,9 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite/sqflite.dart' as settingsSql;
 import 'package:url_launcher/url_launcher.dart';
+
+import 'community_service.dart';
 
 typedef SettingsData = Map<String, dynamic>;
 
@@ -142,10 +143,19 @@ class AppSettingsService extends GetxService {
   SharedPreferences? _prefs;
   Future<void>? _starting;
 
+  final _workers = <Worker>[];
+  final _asyncPrefs = SharedPreferencesAsync();
+
   StreamSubscription<DocumentSnapshot<SettingsData>>? _appSub;
   StreamSubscription<DocumentSnapshot<SettingsData>>? _storeSub;
   StreamSubscription<DocumentSnapshot<SettingsData>>? _deletionSub;
   StreamSubscription<User?>? _authSub;
+
+  CommunityService? get _community {
+    return Get.isRegistered<CommunityService>()
+        ? Get.find<CommunityService>()
+        : null;
+  }
 
   String get prefix =>
       'dimla_settings_${db.app.options.projectId}';
@@ -182,13 +192,14 @@ class AppSettingsService extends GetxService {
 
     return <String>{
       'সব এলাকা',
+      ...?_community?.availableAreas,
       if (raw is List)
         ...raw
             .whereType<String>()
             .map((value) => value.trim())
             .where(
               (value) =>
-          value.isNotEmpty && value.length <= 100,
+          value.isNotEmpty && value.length <= 60,
         ),
     }.toList();
   }
@@ -255,6 +266,8 @@ class AppSettingsService extends GetxService {
         );
       }
 
+      await _connectPreferences();
+
       localError.value = '';
       ready.value = true;
 
@@ -318,6 +331,58 @@ class AppSettingsService extends GetxService {
     }
   }
 
+  Future<void> _connectPreferences() async {
+    // Settings ও Community একই persisted keys ব্যবহার করবে।
+    final oldArea = settingsText(profile, 'area', max: 60);
+
+    final area =
+        await _asyncPrefs.getString('selected_area') ??
+            (oldArea.isEmpty ? 'সব এলাকা' : oldArea);
+
+    final order =
+        await _asyncPrefs.getBool('order_notices_enabled') ??
+            (profile['orderMessages'] != false);
+
+    final updates =
+        await _asyncPrefs.getBool('update_notices_enabled') ??
+            (profile['localMessages'] != false);
+
+    await _asyncPrefs.setString('selected_area', area);
+    await _asyncPrefs.setBool('order_notices_enabled', order);
+    await _asyncPrefs.setBool('update_notices_enabled', updates);
+
+    profile['area'] = area;
+    profile['orderMessages'] = order;
+    profile['localMessages'] = updates;
+
+    final community = _community;
+    if (community == null) return;
+
+    community.selectedArea.value = area;
+    community.orderNoticesEnabled.value = order;
+    community.updateNoticesEnabled.value = updates;
+
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _workers.clear();
+
+    _workers.addAll([
+      ever(
+        community.selectedArea,
+            (value) => profile['area'] = value,
+      ),
+      ever(
+        community.orderNoticesEnabled,
+            (value) => profile['orderMessages'] = value,
+      ),
+      ever(
+        community.updateNoticesEnabled,
+            (value) => profile['localMessages'] = value,
+      ),
+    ]);
+  }
+
   Future<void> _cache(
       String key,
       Map<String, dynamic> data,
@@ -325,7 +390,7 @@ class AppSettingsService extends GetxService {
     try {
       await _prefs!.setString(key, jsonEncode(data));
     } catch (_) {
-      // এই session-এ remote তথ্য ব্যবহার করা যাবে।
+      // Remote information remains usable in this session.
     }
   }
 
@@ -333,7 +398,7 @@ class AppSettingsService extends GetxService {
     try {
       await _prefs!.remove(key);
     } catch (_) {
-      // পরবর্তী refresh-এ আবার চেষ্টা হবে।
+      // Retry on a later refresh.
     }
   }
 
@@ -430,7 +495,7 @@ class AppSettingsService extends GetxService {
 
       settingsRequire(
         name.trim().length <= 80 &&
-            area.trim().length <= 100,
+            area.trim().length <= 60,
         'নাম বা এলাকা বেশি বড়।',
       );
 
@@ -440,11 +505,28 @@ class AppSettingsService extends GetxService {
         'সঠিক ফোন নম্বর দিন।',
       );
 
+      final selected =
+      area.trim().isEmpty ? 'সব এলাকা' : area.trim();
+
+      final community = _community;
+
+      if (community != null) {
+        settingsRequire(
+          await community.selectArea(selected),
+          'এলাকা সংরক্ষণ হয়নি। আবার চেষ্টা করুন।',
+        );
+      } else {
+        await _asyncPrefs.setString(
+          'selected_area',
+          selected,
+        );
+      }
+
       final next = <String, dynamic>{
         ...profile,
         'name': name.trim(),
         'phone': normalizedPhone,
-        'area': area.trim(),
+        'area': selected,
       };
 
       settingsRequire(
@@ -466,20 +548,26 @@ class AppSettingsService extends GetxService {
         'অচেনা preference।',
       );
 
-      final next = <String, dynamic>{
-        ...profile,
-        key: value,
-      };
+      final community = _community;
 
-      settingsRequire(
-        await _prefs!.setString(
-          '$prefix.profile',
-          jsonEncode(next),
-        ),
-        'Preference সংরক্ষণ হয়নি।',
-      );
+      if (community != null) {
+        settingsRequire(
+          await community.setNoticePreference(
+            order: key == 'orderMessages',
+            enabled: value,
+          ),
+          'Preference সংরক্ষণ হয়নি।',
+        );
+      } else {
+        await _asyncPrefs.setBool(
+          key == 'orderMessages'
+              ? 'order_notices_enabled'
+              : 'update_notices_enabled',
+          value,
+        );
+      }
 
-      profile.assignAll(next);
+      profile[key] = value;
     });
   }
 
@@ -510,7 +598,10 @@ class AppSettingsService extends GetxService {
       final currentUid = user!.uid;
 
       await db.runTransaction<void>((transaction) async {
-        final ref = db.doc('data_deletion_requests/$currentUid');
+        final ref = db.doc(
+          'data_deletion_requests/$currentUid',
+        );
+
         final existing = await transaction.get(ref);
 
         if (existing.exists) return;
@@ -570,7 +661,9 @@ class AppSettingsService extends GetxService {
     );
 
     settingsRequire(
-      await launchUrl(Uri(scheme: 'tel', path: phone)),
+      await launchUrl(
+        Uri(scheme: 'tel', path: phone),
+      ),
       'Dialer খুলতে পারেনি।',
     );
   }
@@ -590,14 +683,10 @@ class AppSettingsService extends GetxService {
     final query = {
       'subject': subject,
       'body': body,
-    }
-        .entries
-        .map(
-          (entry) =>
-      '${Uri.encodeComponent(entry.key)}='
-          '${Uri.encodeComponent(entry.value)}',
-    )
-        .join('&');
+    }.entries.map((entry) {
+      return '${Uri.encodeComponent(entry.key)}='
+          '${Uri.encodeComponent(entry.value)}';
+    }).join('&');
 
     settingsRequire(
       await launchUrl(
@@ -616,7 +705,9 @@ class AppSettingsService extends GetxService {
     if (key == 'delivery' || key == 'return') {
       return settingsText(
         store,
-        key == 'delivery' ? 'deliveryPolicy' : 'returnPolicy',
+        key == 'delivery'
+            ? 'deliveryPolicy'
+            : 'returnPolicy',
       );
     }
 
@@ -665,6 +756,16 @@ class AppSettingsService extends GetxService {
     erasing.value = true;
 
     await stopRemote();
+
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _workers.clear();
+
+    if (Get.isRegistered<CommunityService>()) {
+      await Get.delete<CommunityService>(force: true);
+    }
+
     await db.terminate();
     await db.clearPersistence();
   }
@@ -679,6 +780,9 @@ class AppSettingsService extends GetxService {
       'Local preferences পুরো পরিষ্কার হয়নি।',
     );
 
+    // Saved items/inbox preferences use this separate backend.
+    await _asyncPrefs.clear();
+
     final temporaryDirectory = await getTemporaryDirectory();
 
     for (final item in temporaryDirectory.listSync()) {
@@ -691,24 +795,18 @@ class AppSettingsService extends GetxService {
       }
     }
 
-    final databases = Directory(
-      await settingsSql.getDatabasesPath(),
-    );
-
-    if (await databases.exists()) {
-      for (final item in databases.listSync()) {
-        if (item is File) {
-          await settingsSql.deleteDatabase(item.path);
-        }
-      }
-    }
-
+    // SettingsScreen already closes/deletes ledger and cart databases.
     await const MethodChannel('hellodimla/app_info')
         .invokeMethod<void>('closeAfterErase');
   }
 
   @override
   void onClose() {
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _workers.clear();
+
     _appSub?.cancel();
     _storeSub?.cancel();
     _deletionSub?.cancel();

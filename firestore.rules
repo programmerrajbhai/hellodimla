@@ -82,12 +82,40 @@ service cloud.firestore {
       };
     }
 
+    function defaultApp() {
+      return {
+        'supportEnabled': false,
+        'operatorName': '',
+        'operatorAddress': '',
+        'supportPhone': '',
+        'supportEmail': '',
+        'supportHours': '',
+        'policiesPublished': false,
+        'policyVersion': 'draft-1',
+        'policyUpdated': '',
+        'privacyUrl': '',
+        'privacyText': '',
+        'termsUrl': '',
+        'termsText': '',
+        'deletionUrl': '',
+        'deletionText': '',
+        'aboutText': '',
+        'cancellationText': '',
+        'areas': ['সব এলাকা'],
+        'governmentSources': [],
+        'developerName': '',
+        'developerWebsite': ''
+      };
+    }
+
     match /app_config/{id} {
       allow read: if true;
 
       allow create: if signedIn()
-        && id == 'store'
-        && request.resource.data == demoStore();
+        && (
+          (id == 'store' && request.resource.data == demoStore())
+          || (id == 'app' && request.resource.data == defaultApp())
+        );
 
       allow update, delete: if false;
     }
@@ -96,8 +124,8 @@ service cloud.firestore {
       allow list: if resource.data.published == true;
 
       allow get: if !exists(
-        /databases/$(database)/documents/products/$(id)
-      )
+          /databases/$(database)/documents/products/$(id)
+        )
         || id in ['demo_rice', 'demo_tea']
         || resource.data.published == true;
 
@@ -445,8 +473,50 @@ service cloud.firestore {
         )
         && token(request.resource.data.serviceId)
         && text(request.resource.data.reason, 2, 120)
-        && text(request.resource.data.get('description', ''), 0, 2000)
+        && text(
+          request.resource.data.get('description', ''),
+          0,
+          2000
+        )
         && request.resource.data.createdAt == request.time;
+    }
+
+    match /data_deletion_requests/{uid} {
+      allow get: if own(uid);
+
+      allow list: if own(uid)
+        && resource.data.ownerUid == request.auth.uid;
+
+      allow create: if own(uid)
+        && request.resource.data.keys().hasOnly([
+          'ownerUid', 'type', 'description',
+          'policyVersion', 'status', 'createdAt'
+        ])
+        && request.resource.data.ownerUid == uid
+        && request.resource.data.type == 'account_and_cloud_data'
+        && text(request.resource.data.description, 0, 1000)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && get(
+          /databases/$(database)/documents/app_config/app
+        ).data.policiesPublished == true
+        && text(
+          get(
+            /databases/$(database)/documents/app_config/app
+          ).data.deletionText,
+          1,
+          20000
+        )
+        && get(
+          /databases/$(database)/documents/app_config/app
+        ).data.deletionUrl.matches('^https://[^/]+/?.*')
+        && request.resource.data.policyVersion
+          == get(
+            /databases/$(database)/documents/app_config/app
+          ).data.policyVersion;
+
+      // A trusted operator processes these requests.
+      allow update, delete: if false;
     }
 
     match /{document=**} {
