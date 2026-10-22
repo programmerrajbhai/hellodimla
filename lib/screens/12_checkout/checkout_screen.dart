@@ -4,6 +4,8 @@ import 'package:get/get.dart';
 import '../../commerce/shop_models.dart';
 import '../../commerce/shop_service.dart';
 import '../../commerce/shop_widgets.dart';
+import '../../services/app_settings_service.dart';
+import '../../services/settings_widgets.dart' show showPolicy;
 import '../14_order_details/order_details_screen.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -25,7 +27,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   String? zoneId;
   Map<String, dynamic>? quote;
+
   bool acceptedIdentity = false;
+  bool acceptedPolicies = false;
+
+  Future<void> openPolicy(
+      String key,
+      String title,
+      ) =>
+      guarded(() async {
+        final settings = AppSettingsService.instance;
+        await settings.initialize();
+        await showPolicy(key, title);
+      });
 
   @override
   void initState() {
@@ -35,22 +49,33 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> setup() async {
     await shop.loadLocal();
+
     if (shop.config.value == null) {
       await shop.loadCatalog();
     }
+
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    for (final c in [name, phone, address, landmark, note]) {
+    for (final c in [
+      name,
+      phone,
+      address,
+      landmark,
+      note,
+    ]) {
       c.dispose();
     }
+
     super.dispose();
   }
 
   void invalidate() {
-    if (quote != null) setState(() => quote = null);
+    if (quote != null) {
+      setState(() => quote = null);
+    }
   }
 
   Map<String, dynamic> get delivery => {
@@ -103,7 +128,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       : () => guarded(() async {
                     if (await confirm(
                       'Address মুছবেন?',
-                      'শুধু saved address মুছবে। আগের order বদলাবে না।',
+                      'শুধু saved address মুছবে। '
+                          'আগের order বদলাবে না।',
                     )) {
                       await shop.deleteAddress(i);
                     }
@@ -138,21 +164,26 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   Future<void> verify() => guarded(() async {
     if (!form.currentState!.validate()) return;
 
-    if (!acceptedIdentity) {
+    if (!acceptedIdentity || !acceptedPolicies) {
       throw StateError(
-        'Anonymous identity-এর তথ্য পড়ে সম্মতি দিন।',
+        'Privacy/Terms এবং anonymous identity-এর '
+            'তথ্য পড়ে সম্মতি দিন।',
       );
     }
 
     FocusManager.instance.primaryFocus?.unfocus();
+
     final q = await shop.quote(delivery);
 
-    if (mounted) setState(() => quote = q);
+    if (mounted) {
+      setState(() => quote = q);
+    }
   });
 
   Future<void> submit() => guarded(() async {
     if (shop.locked) {
       final id = await shop.place({});
+
       Get.off(
             () => OrderDetailsScreen(
           orderId: id,
@@ -164,7 +195,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     if (quote == null ||
         !form.currentState!.validate() ||
-        !acceptedIdentity) {
+        !acceptedIdentity ||
+        !acceptedPolicies) {
       return;
     }
 
@@ -176,13 +208,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           'Cash on Delivery\n'
           'মোট ${money(number(q['totalMinor']))}\n\n'
           'Delivery: ${address.text}\n\n'
-          'দোকান stock ও delivery যাচাই করে confirm করবে।',
+          'জমা হলে stock সংরক্ষিত হবে। '
+          'দোকান delivery যাচাই করে confirm করবে।',
       action: 'অনুরোধ জমা দিন',
     );
 
     if (!agreed) return;
 
     final id = await shop.place(q);
+
     Get.off(
           () => OrderDetailsScreen(
         orderId: id,
@@ -268,8 +302,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     'নতুন order-এর আগে আগের attempt-এর ফল যাচাই করুন।',
                   ),
                   TextButton(
-                    onPressed:
-                    shop.busy.value ? null : abandon,
+                    onPressed: shop.busy.value ? null : abandon,
                     child: const Text(
                       'যাচাই করে attempt বন্ধ করুন',
                     ),
@@ -322,9 +355,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         labelText: 'মোবাইল নম্বর',
                         counterText: '',
                       ),
-                      validator: (v) => RegExp(
-                        r'^(?:\+88)?01[3-9]\d{8}$',
-                      ).hasMatch(
+                      validator: (v) =>
+                      RegExp(r'^(?:\+88)?01[3-9]\d{8}$')
+                          .hasMatch(
                         normalized(v ?? '').replaceAll(
                           RegExp(r'[\s()-]'),
                           '',
@@ -339,8 +372,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       initialValue: zoneId,
                       isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText:
-                        'ইউনিয়ন / Delivery এলাকা',
+                        labelText: 'ইউনিয়ন / Delivery এলাকা',
                       ),
                       items: zones
                           .map(
@@ -348,8 +380,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           value: '${z['id']}',
                           child: Text(
                             '${z['label']}',
-                            overflow:
-                            TextOverflow.ellipsis,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       )
@@ -364,8 +395,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                     ),
                     if (zones.isEmpty)
                       const Padding(
-                        padding:
-                        EdgeInsets.symmetric(vertical: 10),
+                        padding: EdgeInsets.symmetric(
+                          vertical: 10,
+                        ),
                         child: Text(
                           'Store-এর delivery এলাকা এখনো চালু হয়নি।',
                           style: TextStyle(
@@ -393,8 +425,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                       lines: 2,
                     ),
                     const Text(
-                      'GPS লাগে না। Order জমা হলে দোকান '
-                          'stock দেখে confirm করবে; এখন stock reserve হবে না।',
+                      'GPS লাগে না। Order সফলভাবে জমা হলে '
+                          'stock সংরক্ষিত হবে। দোকান delivery '
+                          'যাচাই করে confirm করবে।',
                       style: TextStyle(
                         color: Colors.blueGrey,
                       ),
@@ -419,8 +452,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 const SizedBox(height: 8),
                 for (final x in shop.cart)
                   Padding(
-                    padding:
-                    const EdgeInsets.symmetric(vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 5,
+                    ),
                     child: Row(
                       children: [
                         Expanded(
@@ -437,7 +471,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 const Divider(height: 24),
                 if (quote == null)
                   const Text(
-                    'মোট টাকা পেতে নিচে Firestore-এর বর্তমান তথ্য যাচাই করুন।',
+                    'মোট টাকা পেতে নিচে বর্তমান দাম '
+                        'ও delivery charge যাচাই করুন।',
                   )
                 else ...[
                   totalRow(
@@ -481,11 +516,52 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 ),
                 TextButton.icon(
                   onPressed: () => policies(cfg),
-                  icon: const Icon(
-                    Icons.policy_outlined,
-                  ),
+                  icon: const Icon(Icons.policy_outlined),
                   label: const Text(
                     'Delivery ও return policy',
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => openPolicy(
+                        'privacy',
+                        'Privacy Policy',
+                      ),
+                      child: const Text('Privacy Policy'),
+                    ),
+                    TextButton(
+                      onPressed: () => openPolicy(
+                        'terms',
+                        'Terms of Use',
+                      ),
+                      child: const Text('Terms of Use'),
+                    ),
+                    TextButton(
+                      onPressed: () => openPolicy(
+                        'deletion',
+                        'Data deletion',
+                      ),
+                      child: const Text('Data deletion'),
+                    ),
+                  ],
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: acceptedPolicies,
+                  onChanged: locked
+                      ? null
+                      : (value) => setState(() {
+                    acceptedPolicies = value ?? false;
+                  }),
+                  title: const Text(
+                    'অর্ডারের শর্ত ও তথ্য ব্যবহারের বিবরণ বুঝেছি।',
+                  ),
+                  subtitle: const Text(
+                    'নাম, ফোন ও ঠিকানা order processing '
+                        'এবং delivery-এর জন্য store ও সংশ্লিষ্ট '
+                        'delivery কর্মীর কাছে যাবে।',
                   ),
                 ),
                 CheckboxListTile(
@@ -494,16 +570,15 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                   onChanged: locked
                       ? null
                       : (v) => setState(
-                        () => acceptedIdentity =
-                        v ?? false,
+                        () => acceptedIdentity = v ?? false,
                   ),
                   title: const Text(
                     'এই device-এর anonymous identity দিয়ে order হবে।',
                   ),
                   subtitle: const Text(
-                    'App data মুছলে বা reinstall করলে নিজের order-এর '
-                        'access হারাতে পারেন। Order number ও ফোন দিয়ে '
-                        'account উদ্ধার করা যাবে না।',
+                    'App data মুছলে বা reinstall করলে নিজের '
+                        'order-এর access হারাতে পারেন। Order number '
+                        'ও ফোন দিয়ে account উদ্ধার করা যাবে না।',
                   ),
                 ),
               ],

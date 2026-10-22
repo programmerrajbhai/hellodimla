@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import 'package:sqflite/sqflite.dart' hide Transaction;
 
 import '../services/saved_items_store.dart';
+import 'inventory_mutation.dart';
 import 'shop_models.dart';
 
 class ShopService extends GetxService {
@@ -22,28 +23,37 @@ class ShopService extends GetxService {
   final products = <ShopProduct>[].obs;
   final cart = <CartLine>[].obs;
   final addresses = <Map<String, dynamic>>[].obs;
+
   final config = Rxn<StoreConfig>();
   final pending = Rxn<Map<String, dynamic>>();
+
   final validation = <String, Map<String, dynamic>>{}.obs;
 
   final loading = false.obs;
   final busy = false.obs;
   final localReady = false.obs;
+
   final error = ''.obs;
   final localError = ''.obs;
 
-  Future<void>? _localTask, _catalogTask;
+  Future<void>? _localTask;
+  Future<void>? _catalogTask;
   Future<Database>? _databaseTask;
+
   Map<String, dynamic> _state = {};
 
   bool get locked => pending.value != null;
+
   int get units => cart.fold(0, (n, x) => n + x.qty);
+
   int get subtotal => cart.fold(0, (n, x) => n + x.subtotal);
+
   List<Map<String, dynamic>> get items =>
       cart.map((x) => x.request).toList();
 
   String newId() {
     final random = Random.secure();
+
     return List.generate(
       24,
           (_) => random.nextInt(16).toRadixString(16),
@@ -79,8 +89,9 @@ class ShopService extends GetxService {
     'name': id == 'demo_rice' ? 'ডেমো চাল' : 'ডেমো চা',
     'categoryId': 'grocery',
     'categoryName': 'মুদি',
-    'unit':
-    id == 'demo_rice' ? '১ কেজি প্যাকেট' : '১০০ গ্রাম প্যাকেট',
+    'unit': id == 'demo_rice'
+        ? '১ কেজি প্যাকেট'
+        : '১০০ গ্রাম প্যাকেট',
     'priceMinor': id == 'demo_rice' ? 7500 : 12000,
     'originalPriceMinor': 0,
     'stockQty': 20,
@@ -106,9 +117,11 @@ class ShopService extends GetxService {
     }
 
     final uid = auth.currentUser?.uid;
+
     if (uid == null) {
       throw StateError('Anonymous Auth চালু করুন।');
     }
+
     return uid;
   }
 
@@ -123,11 +136,13 @@ class ShopService extends GetxService {
         return;
       }
 
-      final refs = ['demo_rice', 'demo_tea']
-          .map((id) => db.doc('products/$id'))
-          .toList();
+      final refs = [
+        'demo_rice',
+        'demo_tea',
+      ].map((id) => db.doc('products/$id')).toList();
 
       final docs = <DocumentSnapshot<Map<String, dynamic>>>[];
+
       for (final ref in refs) {
         docs.add(await tx.get(ref));
       }
@@ -175,6 +190,7 @@ class ShopService extends GetxService {
   Future<void> _readLocal() async {
     try {
       final database = await _database();
+
       final rows = await database.query(
         'commerce_state',
         where: 'id = ?',
@@ -186,13 +202,14 @@ class ShopService extends GetxService {
           : object(jsonDecode(rows.first['value'] as String));
 
       if (rows.isEmpty) {
-        await database.insert(
-          'commerce_state',
-          {'id': 1, 'value': jsonEncode(_state)},
-        );
+        await database.insert('commerce_state', {
+          'id': 1,
+          'value': jsonEncode(_state),
+        });
       }
 
       _apply(_state);
+
       localReady.value = true;
       localError.value = '';
     } catch (_) {
@@ -204,20 +221,23 @@ class ShopService extends GetxService {
 
   void _apply(Map<String, dynamic> state) {
     cart.assignAll(
-      ((state['cart'] as List?) ?? [])
-          .map((x) => CartLine.fromMap(object(x))),
+      ((state['cart'] as List?) ?? []).map(
+            (x) => CartLine.fromMap(object(x)),
+      ),
     );
 
     addresses.assignAll(
       ((state['addresses'] as List?) ?? []).map(object),
     );
 
-    pending.value =
-    state['pending'] == null ? null : object(state['pending']);
+    pending.value = state['pending'] == null
+        ? null
+        : object(state['pending']);
   }
 
   Future<void> _commit(Map<String, dynamic> changes) async {
     await loadLocal();
+
     if (!localReady.value) {
       throw StateError(localError.value);
     }
@@ -228,7 +248,10 @@ class ShopService extends GetxService {
     await database.transaction(
           (tx) => tx.insert(
         'commerce_state',
-        {'id': 1, 'value': jsonEncode(next)},
+        {
+          'id': 1,
+          'value': jsonEncode(next),
+        },
         conflictAlgorithm: ConflictAlgorithm.replace,
       ),
     );
@@ -243,6 +266,7 @@ class ShopService extends GetxService {
     }
 
     busy.value = true;
+
     try {
       return await action();
     } finally {
@@ -252,7 +276,9 @@ class ShopService extends GetxService {
 
   void _editable() {
     if (locked) {
-      throw StateError('আগের order attempt-এর ফল নিশ্চিত করুন।');
+      throw StateError(
+        'আগের order attempt-এর ফল নিশ্চিত করুন।',
+      );
     }
   }
 
@@ -274,6 +300,7 @@ class ShopService extends GetxService {
 
       final live = store.data()?['demoMode'] != true;
       final loaded = <ShopProduct>[];
+
       QueryDocumentSnapshot<Map<String, dynamic>>? last;
 
       while (true) {
@@ -292,16 +319,24 @@ class ShopService extends GetxService {
         );
 
         for (final doc in page.docs) {
-          if (live && doc.data()['demoMode'] == true) continue;
-          loaded.add(ShopProduct.fromMap(doc.id, doc.data()));
+          if (live && doc.data()['demoMode'] == true) {
+            continue;
+          }
+
+          loaded.add(
+            ShopProduct.fromMap(doc.id, doc.data()),
+          );
         }
 
         if (page.docs.length < 100) break;
+
         last = page.docs.last;
       }
 
-      config.value =
-      store.exists ? StoreConfig(store.data()!) : null;
+      config.value = store.exists
+          ? StoreConfig(store.data()!)
+          : null;
+
       products.assignAll(loaded);
     } catch (e) {
       error.value = message(e);
@@ -321,6 +356,7 @@ class ShopService extends GetxService {
     if (result.docs.isEmpty) return null;
 
     final doc = result.docs.first;
+
     return ShopProduct.fromMap(doc.id, doc.data());
   }
 
@@ -334,6 +370,7 @@ class ShopService extends GetxService {
         _editable();
 
         final key = '${p.id}:${p.variants.isEmpty ? '' : v.id}';
+
         CartLine? old;
 
         for (final x in cart) {
@@ -348,7 +385,9 @@ class ShopService extends GetxService {
         if (!v.available ||
             qty < 1 ||
             count > min(v.stock, 99)) {
-          throw StateError('Stock-এর বেশি নেওয়া যাবে না।');
+          throw StateError(
+            'Stock-এর বেশি নেওয়া যাবে না।',
+          );
         }
 
         if (old == null && cart.length >= 5) {
@@ -363,6 +402,7 @@ class ShopService extends GetxService {
         await _commit({
           'cart': next.map((x) => x.toMap()).toList(),
         });
+
         validation.clear();
       });
 
@@ -410,13 +450,19 @@ class ShopService extends GetxService {
 
   Future<void> clear() => operation(() async {
     _editable();
+
     await _commit({'cart': []});
+
     validation.clear();
   });
 
-  List<Map<String, dynamic>> _requests(List<dynamic> source) {
+  List<Map<String, dynamic>> _requests(
+      List<dynamic> source,
+      ) {
     if (source.isEmpty || source.length > 5) {
-      throw StateError('এক order-এ ১–৫ ধরনের পণ্য রাখুন।');
+      throw StateError(
+        'এক order-এ ১–৫ ধরনের পণ্য রাখুন।',
+      );
     }
 
     final list = source.map((x) => object(x)).toList();
@@ -457,8 +503,11 @@ class ShopService extends GetxService {
       );
 
       final raw = doc.data();
-      final p =
-      raw == null ? null : ShopProduct.fromMap(doc.id, raw);
+
+      final p = raw == null
+          ? null
+          : ShopProduct.fromMap(doc.id, raw);
+
       final v = p?.choice('${x['variantId'] ?? ''}');
 
       final valid = raw?['published'] == true &&
@@ -471,8 +520,7 @@ class ShopService extends GetxService {
           ...x,
           'valid': false,
           'stockQty': v?.stock ?? 0,
-          'message':
-          'পণ্য/variant নেই অথবা পর্যাপ্ত stock নেই।',
+          'message': 'পণ্য/variant নেই অথবা পর্যাপ্ত stock নেই।',
         });
       } else {
         result.add({
@@ -481,8 +529,9 @@ class ShopService extends GetxService {
             v,
             number(x['qty']),
           ).toMap(),
-          'variantIndex':
-          p.variants.isEmpty ? -1 : p.variants.indexOf(v),
+          'variantIndex': p.variants.isEmpty
+              ? -1
+              : p.variants.indexOf(v),
           'subtotalMinor': v.price * number(x['qty']),
           'stockQty': v.stock,
           'valid': true,
@@ -537,7 +586,8 @@ class ShopService extends GetxService {
       ) {
     final text = '${value ?? ''}'.trim();
 
-    if (text.length < minLength || text.length > maxLength) {
+    if (text.length < minLength ||
+        text.length > maxLength) {
       throw StateError(
         'ঠিকানার তথ্য সঠিক দৈর্ঘ্যে লিখুন।',
       );
@@ -551,11 +601,28 @@ class ShopService extends GetxService {
       List<Map<String, dynamic>> requests,
       Map<String, dynamic> input,
       ) async {
-    final store = await tx.get(db.doc('app_config/store'));
+    final store = await tx.get(
+      db.doc('app_config/store'),
+    );
+
     final cfg = store.data();
 
     if (cfg == null || cfg['enabled'] != true) {
-      throw StateError('Store এখন order নিচ্ছে না।');
+      throw StateError(
+        'Store এখন order নিচ্ছে না।',
+      );
+    }
+
+    final policy = (
+        await tx.get(db.doc('app_config/app'))
+    ).data();
+
+    final demo = cfg['demoMode'] == true;
+
+    if (!demo && !_publishedPolicies(policy)) {
+      throw StateError(
+        'Store-এর Privacy, Terms ও deletion তথ্য এখনও প্রস্তুত নয়।',
+      );
     }
 
     final zones = ((cfg['deliveryZones'] as List?) ?? [])
@@ -563,11 +630,15 @@ class ShopService extends GetxService {
         .toList();
 
     final index = zones.indexWhere(
-          (z) => z['id'] == input['zoneId'] && z['enabled'] == true,
+          (z) =>
+      z['id'] == input['zoneId'] &&
+          z['enabled'] == true,
     );
 
     if (index < 0) {
-      throw StateError('এই এলাকায় delivery চালু নেই।');
+      throw StateError(
+        'এই এলাকায় delivery চালু নেই।',
+      );
     }
 
     final zone = zones[index];
@@ -581,7 +652,9 @@ class ShopService extends GetxService {
     }
 
     if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(phone)) {
-      throw StateError('সঠিক মোবাইল নম্বর দিন।');
+      throw StateError(
+        'সঠিক মোবাইল নম্বর দিন।',
+      );
     }
 
     final address = <String, dynamic>{
@@ -635,7 +708,9 @@ class ShopService extends GetxService {
     final fee = number(zone['chargeMinor'], -1);
 
     if (fee < 0 || subtotal + fee > 100000000) {
-      throw StateError('Delivery charge/config ঠিক করুন।');
+      throw StateError(
+        'Delivery charge/config ঠিক করুন।',
+      );
     }
 
     final quote = <String, dynamic>{
@@ -651,9 +726,13 @@ class ShopService extends GetxService {
       'policyVersion': '${cfg['policyVersion'] ?? ''}',
       'returnWindowDays': number(cfg['returnWindowDays']),
       'supportPhone': '${cfg['supportPhone'] ?? ''}',
+      'appPolicyVersion': demo
+          ? 'demo'
+          : policy!['policyVersion'],
     };
 
     quote['fingerprint'] = jsonEncode(quote);
+
     return quote;
   }
 
@@ -662,19 +741,29 @@ class ShopService extends GetxService {
       ) =>
       operation(() async {
         await identity();
+
         return db.runTransaction(
-              (tx) => _quote(tx, _requests(items), address),
+              (tx) => _quote(
+            tx,
+            _requests(items),
+            address,
+          ),
         );
       });
 
-  Future<String> place(Map<String, dynamic> quote) =>
+  Future<String> place(
+      Map<String, dynamic> quote,
+      ) =>
       operation(() async {
         await loadLocal();
+
         final uid = await identity();
 
         if (!locked) {
           if (quote['fingerprint'] is! String) {
-            throw StateError('আগে মোট টাকা যাচাই করুন।');
+            throw StateError(
+              'আগে মোট টাকা যাচাই করুন।',
+            );
           }
 
           await _commit({
@@ -697,7 +786,11 @@ class ShopService extends GetxService {
 
         final requestId = '${attempt['requestId']}';
         final id = '${uid}_$requestId';
-        final requests = _requests(attempt['items'] as List);
+
+        final requests = _requests(
+          attempt['items'] as List,
+        );
+
         final address = object(attempt['address']);
 
         final intent = jsonEncode({
@@ -714,7 +807,9 @@ class ShopService extends GetxService {
 
             if (existing.exists) {
               if (existing.data()?['status'] == 'abandoned') {
-                throw StateError('এই attempt বন্ধ করা হয়েছে।');
+                throw StateError(
+                  'এই attempt বন্ধ করা হয়েছে।',
+                );
               }
 
               if (existing.data()?['intentHash'] != intent) {
@@ -722,6 +817,7 @@ class ShopService extends GetxService {
                   'একই attempt-এর তথ্য মেলেনি।',
                 );
               }
+
               return;
             }
 
@@ -731,7 +827,8 @@ class ShopService extends GetxService {
               address,
             );
 
-            if (fresh['fingerprint'] != attempt['fingerprint']) {
+            if (fresh['fingerprint'] !=
+                attempt['fingerprint']) {
               throw StateError(
                 'দাম/charge/policy বদলেছে। '
                     'Attempt বন্ধ করে আবার মোট টাকা যাচাই করুন।',
@@ -741,15 +838,24 @@ class ShopService extends GetxService {
             final data = Map<String, dynamic>.from(fresh)
               ..remove('fingerprint');
 
+            final stockWrites = await _stockWrites(
+              tx,
+              (fresh['lines'] as List).map(object).toList(),
+              requestId,
+              -1,
+            );
+
             tx.set(orderRef, {
               ...data,
               'ownerUid': uid,
               'requestId': requestId,
               'orderNumber': 'HD-$requestId',
               'intentHash': intent,
+              'inventoryVersion': 1,
               'lineKeys': (fresh['lines'] as List)
                   .map(
-                    (x) => '${x['productId']}:${x['variantId']}',
+                    (x) =>
+                '${x['productId']}:${x['variantId']}',
               )
                   .toList(),
               'status': 'placed',
@@ -761,10 +867,18 @@ class ShopService extends GetxService {
             });
 
             final lines = fresh['lines'] as List;
+
             for (var i = 0; i < lines.length; i++) {
               tx.set(
                 orderRef.collection('items').doc('$i'),
                 object(lines[i]),
+              );
+            }
+
+            for (final entry in stockWrites.entries) {
+              tx.update(
+                db.doc('products/${entry.key}'),
+                entry.value,
               );
             }
           });
@@ -790,14 +904,21 @@ class ShopService extends GetxService {
         await _commit({
           'cart': [],
           'pending': null,
-          'addresses': [address, ...previous].take(5).toList(),
+          'addresses': [
+            address,
+            ...previous,
+          ].take(5).toList(),
         });
 
         validation.clear();
+
         return id;
       });
 
-  void _checkAttempt(Map<String, dynamic> attempt, String uid) {
+  void _checkAttempt(
+      Map<String, dynamic> attempt,
+      String uid,
+      ) {
     if (attempt['ownerUid'] != uid) {
       throw StateError(
         'আগের anonymous identity নেই। Support-এ যোগাযোগ করুন।',
@@ -812,49 +933,54 @@ class ShopService extends GetxService {
     }
   }
 
-  Future<String?> abandon() => operation(() async {
-    final attempt = pending.value;
-    if (attempt == null) return null;
+  Future<String?> abandon() =>
+      operation(() async {
+        final attempt = pending.value;
 
-    final uid = await identity();
-    _checkAttempt(attempt, uid);
+        if (attempt == null) return null;
 
-    final requestId = '${attempt['requestId']}';
-    final id = '${uid}_$requestId';
-    final ref = db.doc('orders/$id');
+        final uid = await identity();
 
-    final existingId =
-    await db.runTransaction<String?>((tx) async {
-      final doc = await tx.get(ref);
+        _checkAttempt(attempt, uid);
 
-      if (doc.exists) {
-        return doc.data()?['status'] == 'abandoned'
-            ? null
-            : id;
-      }
+        final requestId = '${attempt['requestId']}';
+        final id = '${uid}_$requestId';
+        final ref = db.doc('orders/$id');
 
-      tx.set(ref, {
-        'attemptOwner': uid,
-        'requestId': requestId,
-        'status': 'abandoned',
-        'createdAt': FieldValue.serverTimestamp(),
+        final existingId =
+        await db.runTransaction<String?>((tx) async {
+          final doc = await tx.get(ref);
+
+          if (doc.exists) {
+            return doc.data()?['status'] == 'abandoned'
+                ? null
+                : id;
+          }
+
+          tx.set(ref, {
+            'attemptOwner': uid,
+            'requestId': requestId,
+            'status': 'abandoned',
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+          return null;
+        });
+
+        await _commit({
+          'pending': null,
+          if (existingId != null) 'cart': [],
+        });
+
+        validation.clear();
+
+        return existingId;
       });
-
-      return null;
-    });
-
-    await _commit({
-      'pending': null,
-      if (existingId != null) 'cart': [],
-    });
-
-    validation.clear();
-    return existingId;
-  });
 
   Future<void> deleteAddress(int index) =>
       operation(() async {
         final next = addresses.toList()..removeAt(index);
+
         await _commit({'addresses': next});
       });
 
@@ -890,7 +1016,9 @@ class ShopService extends GetxService {
         includeMetadataChanges: true,
       );
 
-  Future<List<String>> reorder(Map<String, dynamic> order) =>
+  Future<List<String>> reorder(
+      Map<String, dynamic> order,
+      ) =>
       operation(() async {
         await loadLocal();
         _editable();
@@ -898,6 +1026,7 @@ class ShopService extends GetxService {
         final requests = _requests(
           ((order['lines'] as List?) ?? []).map((x) {
             final line = object(x);
+
             return {
               'productId': line['productId'],
               'variantId': line['variantId'],
@@ -929,11 +1058,16 @@ class ShopService extends GetxService {
 
         return checked
             .where((x) => x['valid'] != true)
-            .map((x) => '${x['productId']}: ${x['message']}')
+            .map(
+              (x) => '${x['productId']}: ${x['message']}',
+        )
             .toList();
       });
 
-  Future<void> cancel(String id, String reason) =>
+  Future<void> cancel(
+      String id,
+      String reason,
+      ) =>
       operation(() async {
         final uid = await identity();
         final ref = db.doc('orders/$id');
@@ -943,7 +1077,9 @@ class ShopService extends GetxService {
           final data = doc.data();
 
           if (data == null || data['ownerUid'] != uid) {
-            throw StateError('নিজের order পাওয়া যায়নি।');
+            throw StateError(
+              'নিজের order পাওয়া যায়নি।',
+            );
           }
 
           if (data['status'] == 'cancelled') return;
@@ -954,14 +1090,107 @@ class ShopService extends GetxService {
             );
           }
 
+          if (data['paymentStatus'] != 'unpaid') {
+            throw StateError(
+              'Payment যাচাইয়ের জন্য Support-এ যোগাযোগ করুন।',
+            );
+          }
+
+          final stockWrites =
+          data['inventoryVersion'] == 1
+              ? await _stockWrites(
+            tx,
+            (data['lines'] as List)
+                .map(object)
+                .toList(),
+            data['requestId'] as String,
+            1,
+          )
+              : <String, Map<String, dynamic>>{};
+
           tx.update(ref, {
             'status': 'cancelled',
             'cancellationReason': _text(reason, 2, 300),
             'cancelledAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
           });
+
+          for (final entry in stockWrites.entries) {
+            tx.update(
+              db.doc('products/${entry.key}'),
+              entry.value,
+            );
+          }
         });
       });
+
+  bool _publishedPolicies(
+      Map<String, dynamic>? data,
+      ) {
+    if (data == null ||
+        data['policiesPublished'] != true) {
+      return false;
+    }
+
+    bool text(String key) =>
+        data[key] is String &&
+            (data[key] as String).trim().isNotEmpty;
+
+    bool link(String key) {
+      final uri = Uri.tryParse('${data[key] ?? ''}');
+
+      return uri != null &&
+          uri.scheme == 'https' &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty;
+    }
+
+    return text('operatorName') &&
+        text('supportEmail') &&
+        text('policyVersion') &&
+        text('privacyText') &&
+        text('termsText') &&
+        text('deletionText') &&
+        link('privacyUrl') &&
+        link('deletionUrl');
+  }
+
+  Future<Map<String, Map<String, dynamic>>> _stockWrites(
+      Transaction tx,
+      List<Map<String, dynamic>> lines,
+      String requestId,
+      int direction,
+      ) async {
+    final result = <String, Map<String, dynamic>>{};
+
+    final ids = lines
+        .map((line) => line['productId'] as String)
+        .toSet();
+
+    for (final id in ids) {
+      final document = await tx.get(
+        db.doc('products/$id'),
+      );
+
+      final product = document.data();
+
+      if (product == null) {
+        throw StateError(
+          'পণ্যের তথ্য পাওয়া যায়নি। Support-এ যোগাযোগ করুন।',
+        );
+      }
+
+      result[id] = inventoryMutation(
+        product: product,
+        productId: id,
+        lines: lines,
+        requestId: requestId,
+        direction: direction,
+      );
+    }
+
+    return result;
+  }
 
   Future<void> issue({
     required String orderId,
@@ -1007,6 +1236,7 @@ class ShopService extends GetxService {
                 );
               }
             }
+
             return;
           }
 
@@ -1014,12 +1244,17 @@ class ShopService extends GetxService {
               await tx.get(db.doc('orders/$orderId'))
           ).data();
 
-          if (order == null || order['ownerUid'] != uid) {
-            throw StateError('নিজের order পাওয়া যায়নি।');
+          if (order == null ||
+              order['ownerUid'] != uid) {
+            throw StateError(
+              'নিজের order পাওয়া যায়নি।',
+            );
           }
 
           if (!['issue', 'return'].contains(type)) {
-            throw StateError('অনুরোধের ধরন ঠিক করুন।');
+            throw StateError(
+              'অনুরোধের ধরন ঠিক করুন।',
+            );
           }
 
           if (type == 'return') {
@@ -1030,7 +1265,9 @@ class ShopService extends GetxService {
                 DateTime.now().isAfter(
                   delivered.add(
                     Duration(
-                      days: number(order['returnWindowDays']),
+                      days: number(
+                        order['returnWindowDays'],
+                      ),
                     ),
                   ),
                 )) {
@@ -1052,12 +1289,15 @@ class ShopService extends GetxService {
       if (e.code == 'operation-not-allowed') {
         return 'Firebase Console-এ Anonymous Auth চালু করুন।';
       }
+
       if (e.code == 'permission-denied') {
         return 'Firestore Rules publish হয়েছে কি না দেখুন।';
       }
+
       if (e.code == 'unavailable') {
         return 'Internet বা Firestore সংযোগ পাওয়া যায়নি।';
       }
+
       return 'কাজটি হয়নি (${e.code})।';
     }
 
@@ -1065,74 +1305,86 @@ class ShopService extends GetxService {
   }
 
   Future<void> settingsSaveAddress(
-    Map<String, dynamic> input, {
-    int? index,
-  }) => operation(() async {
-    await loadLocal();
-    _editable();
+      Map<String, dynamic> input, {
+        int? index,
+      }) =>
+      operation(() async {
+        await loadLocal();
+        _editable();
 
-    var phone = normalized(_text(input['phone'], 11, 24))
-        .replaceAll(RegExp(r'[\s()-]'), '');
+        var phone = normalized(
+          _text(input['phone'], 11, 24),
+        ).replaceAll(RegExp(r'[\s()-]'), '');
 
-    if (phone.startsWith('+88')) {
-      phone = phone.substring(3);
-    }
+        if (phone.startsWith('+88')) {
+          phone = phone.substring(3);
+        }
 
-    if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(phone)) {
-      throw StateError('সঠিক মোবাইল নম্বর দিন।');
-    }
+        if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(phone)) {
+          throw StateError(
+            'সঠিক মোবাইল নম্বর দিন।',
+          );
+        }
 
-    final address = <String, dynamic>{
-      'name': _text(input['name'], 2, 80),
-      'phone': phone,
-      'zoneId': _text(input['zoneId'], 1, 128),
-      'zoneLabel': _text(input['zoneLabel'], 1, 100),
-      'zoneIndex': input['zoneIndex'] is int
-          ? input['zoneIndex']
-          : 0,
-      'address': _text(input['address'], 8, 400),
-      'landmark': _text(input['landmark'], 0, 160),
-      'note': _text(input['note'], 0, 300),
-    };
+        final address = <String, dynamic>{
+          'name': _text(input['name'], 2, 80),
+          'phone': phone,
+          'zoneId': _text(input['zoneId'], 1, 128),
+          'zoneLabel': _text(input['zoneLabel'], 1, 100),
+          'zoneIndex': input['zoneIndex'] is int
+              ? input['zoneIndex']
+              : 0,
+          'address': _text(input['address'], 8, 400),
+          'landmark': _text(input['landmark'], 0, 160),
+          'note': _text(input['note'], 0, 300),
+        };
 
-    final next = addresses
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
+        final next = addresses
+            .map(
+              (item) => Map<String, dynamic>.from(item),
+        )
+            .toList();
 
-    if (index == null) {
-      if (next.length >= 5) {
-        throw StateError(
-          'সর্বোচ্চ ৫টি ঠিকানা। আগে একটি সরান।',
-        );
-      }
-      next.insert(0, address);
-    } else {
-      if (index < 0 || index >= next.length) {
-        throw StateError('তালিকা বদলেছে। আবার খুলুন।');
-      }
-      next[index] = address;
-    }
+        if (index == null) {
+          if (next.length >= 5) {
+            throw StateError(
+              'সর্বোচ্চ ৫টি ঠিকানা। আগে একটি সরান।',
+            );
+          }
 
-    await _commit({'addresses': next});
-  });
+          next.insert(0, address);
+        } else {
+          if (index < 0 || index >= next.length) {
+            throw StateError(
+              'তালিকা বদলেছে। আবার খুলুন।',
+            );
+          }
 
-  Future<void> settingsEraseLocalDatabase() => operation(() async {
-    await loadLocal();
-    _editable();
+          next[index] = address;
+        }
 
-    final database = await _database();
-    final path = database.path;
+        await _commit({'addresses': next});
+      });
 
-    await database.close();
+  Future<void> settingsEraseLocalDatabase() =>
+      operation(() async {
+        await loadLocal();
+        _editable();
 
-    _databaseTask = null;
-    _localTask = null;
-    localReady.value = false;
+        final database = await _database();
+        final path = database.path;
 
-    await deleteDatabase(path);
+        await database.close();
 
-    _state = {};
-    _apply(_state);
-    validation.clear();
-  });
+        _databaseTask = null;
+        _localTask = null;
+        localReady.value = false;
+
+        await deleteDatabase(path);
+
+        _state = {};
+        _apply(_state);
+
+        validation.clear();
+      });
 }
