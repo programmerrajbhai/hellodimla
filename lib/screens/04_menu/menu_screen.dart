@@ -1,12 +1,159 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart' hide MenuController;
-import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../services/community_service.dart';
+import '../../data/models/public_service_phone.dart';
+import '../02_home/sheets/home_sheets.dart';
+import '../03_notifications/notifications_screen.dart';
+import '../07_service_details/service_details_screen.dart';
+import '../08_saved_items/saved_items_screen.dart';
+import '../21_settings/settings_screen.dart';
+import '../22_help_policies/help_policies_screen.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-
 import 'menu_controller.dart';
 
-class MenuScreen extends StatelessWidget {
-  const MenuScreen({super.key});
+typedef _Map = Map<String,dynamic>;
+const _all='সব এলাকা', _wide='পুরো ডিমলা';
+List<String> _strings(dynamic v)=> v is List ? v.whereType<String>().toList() : [];
+List<_Map> _fields(_Map m)=> (m['fields'] as List? ?? []).whereType<Map>().map((v)=>Map<String,dynamic>.from(v)).toList();
+void _message(BuildContext c,String s)=>ScaffoldMessenger.of(c).showSnackBar(SnackBar(content:Text(s)));
+
+class MenuScreen extends ServiceMenuScreen { const MenuScreen({super.key}); }
+
+class ServiceMenuScreen extends StatefulWidget {
+  const ServiceMenuScreen({super.key,this.menuId=''});
+  final String menuId;
+  @override State<ServiceMenuScreen> createState()=>_MenuState();
+}
+class _MenuState extends State<ServiceMenuScreen>{
+  final community=Get.find<CommunityService>();
+  late final stream=FirebaseFirestore.instance.doc('directory_config/menu').snapshots();
+  String search='';
+  @override Widget build(BuildContext context)=>StreamBuilder<DocumentSnapshot<_Map>>(stream:stream,builder:(context,s){
+    if(s.hasError && widget.menuId.isEmpty)return const _LegacyMenuScreen();
+    if(s.hasError)return const Scaffold(body:Center(child:Text('মেনু লোড হয়নি। সংযোগ ও Firestore অনুমতি দেখুন।')));
+    if(!s.hasData)return const Scaffold(body:Center(child:CircularProgressIndicator()));
+    if(!s.data!.exists && widget.menuId.isEmpty)return const _LegacyMenuScreen();
+    final nodes=Map<String,dynamic>.from(s.data!.data()?['nodes'] as Map? ?? {});
+    final id=widget.menuId,root=id.isEmpty;
+    final n=root?<String,dynamic>{'kind':'group','title':'সেবা মেনু'}:nodes[id] as _Map?;
+    if(n==null)return Scaffold(appBar:AppBar(),body:const Center(child:Text('এই মেনু এখন পাওয়া যাচ্ছে না।')));
+    final children=nodes.entries.where((e)=>e.value['parent']==id && e.value['title'].toString().toLowerCase().contains(search.toLowerCase())).toList()
+      ..sort((a,b){final r=(a.value['order'] as int).compareTo(b.value['order'] as int);return r!=0?r:a.value['title'].toString().compareTo(b.value['title'].toString());});
+    return Scaffold(appBar:AppBar(title:Text(n['title']),actions:[if(root)PopupMenuButton<String>(tooltip:'আরও অপশন',onSelected:(v){
+      switch(v){case 'সেভ করা':Get.to(()=>const SavedItemsScreen());break;case 'সেটিংস':Get.to(()=>const SettingsScreen());break;case 'সাহায্য':Get.to(()=>const HelpPoliciesScreen());break;default:Get.to(()=>const NotificationsScreen());}
+    },itemBuilder:(_)=>[for(final label in ['সেভ করা','সেটিংস','সাহায্য','নোটিফিকেশন'])PopupMenuItem(value:label,child:Text(label))])]),
+        body:SafeArea(child:Column(children:[
+          ListTile(leading:const Icon(Icons.place_outlined),title:Obx(()=>Text('এলাকা: ${community.selectedArea.value}')),trailing:const Icon(Icons.expand_more),onTap:()=>Get.bottomSheet(const AreaSelectionSheet(),isScrollControlled:true)),
+          if(n['kind']=='group')...[
+            Padding(padding:const EdgeInsets.symmetric(horizontal:16),child:TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'এই মেনুতে খুঁজুন'),onChanged:(v)=>setState(()=>search=v))),
+            Expanded(child:children.isEmpty?const Center(child:Text('কোনো মেনু পাওয়া যায়নি।')):ListView.builder(itemCount:children.length,itemBuilder:(_,i){
+              final e=children[i];return ListTile(leading:_MenuIcon(key:ValueKey('${e.key}:${e.value['icon']}'),id:e.key,version:e.value['icon'] as int? ?? 0),
+                  title:Text(e.value['title']),trailing:const Icon(Icons.chevron_right),onTap:()=>Get.to(()=>ServiceMenuScreen(menuId:e.key),preventDuplicates:false));}))]
+          else Expanded(child:_Listings(id:id,node:n))
+        ])));
+  });
+}
+
+class _MenuIcon extends StatefulWidget{
+  const _MenuIcon({super.key,required this.id,required this.version});
+  final String id; final int version;
+  @override State<_MenuIcon> createState()=>_IconState();
+}
+class _IconState extends State<_MenuIcon>{
+  late final Future<Uint8List>? image=widget.version==0?null:FirebaseFirestore.instance.doc('directory_icons/${widget.id}').get().then((s)=>base64Decode(s.data()?['png']??''));
+  @override Widget build(BuildContext c)=>FutureBuilder<Uint8List>(future:image,builder:(c,s)=>s.hasData&&s.data!.isNotEmpty?Image.memory(s.data!,width:42,height:42,errorBuilder:(_,__,___)=>const Icon(Icons.grid_view)):const Icon(Icons.grid_view_rounded,color:Color(0xff245ede)));
+}
+
+class _Listings extends StatefulWidget{
+  const _Listings({required this.id,required this.node});
+  final String id; final _Map node;
+  @override State<_Listings> createState()=>_ListingsState();
+}
+class _ListingsState extends State<_Listings>{
+  final filters=<String,String>{};
+  late final stream=FirebaseFirestore.instance.collection('services').where('published',isEqualTo:true).where('categoryId',isEqualTo:widget.id).snapshots();
+  @override Widget build(BuildContext c){final fields=_fields(widget.node);
+  return Column(children:[
+    if(fields.any((f)=>_strings(f['options']).isNotEmpty))SingleChildScrollView(scrollDirection:Axis.horizontal,child:Row(children:[
+      for(final f in fields.where((f)=>_strings(f['options']).isNotEmpty))Padding(padding:const EdgeInsets.symmetric(horizontal:8),child:DropdownButton<String>(
+          value:_strings(f['options']).contains(filters[f['key']])?filters[f['key']]:'',
+          items:[DropdownMenuItem(value:'',child:Text('${f['label']}: সব')),for(final v in _strings(f['options']))DropdownMenuItem(value:v,child:Text(v))],
+          onChanged:(v)=>setState(()=>filters[f['key']]=v??'')))])),
+    if(widget.node['accept']==true)TextButton.icon(icon:const Icon(Icons.add),label:const Text('তথ্য যোগ করুন'),onPressed:()=>showDialog(context:c,builder:(_)=>_Submit(id:widget.id,node:widget.node))),
+    Expanded(child:StreamBuilder<QuerySnapshot<_Map>>(stream:stream,builder:(_,s){
+      if(s.hasError)return const Center(child:Text('তালিকা লোড হয়নি। সংযোগ ও অনুমতি দেখুন।'));
+      if(!s.hasData)return const Center(child:CircularProgressIndicator());
+      return Obx((){final area=Get.find<CommunityService>().selectedArea.value;
+      final docs=s.data!.docs.where((d){final v=d.data(),zones=_strings(v['areas']);return (area==_all||zones.contains(area)||zones.contains(_wide))&&fields.every((f){final fl=filters[f['key']];return fl==null||!_strings(f['options']).contains(fl)||v['extra']?[f['key']]==fl;});}).toList()
+        ..sort((a,b){int rank(_Map d)=>area!=_all&&!_strings(d['areas']).contains(area)?1:0;final r=rank(a.data()).compareTo(rank(b.data()));return r==0?(a.data()['name']??'').toString().compareTo((b.data()['name']??'').toString()):r;});
+      if(docs.isEmpty)return const Center(child:Text('এই নির্বাচনে এখনো কোনো তথ্য নেই।'));
+      return ListView.builder(itemCount:docs.length,itemBuilder:(_,i){final d=docs[i],v=d.data(),phones=publicServicePhones(v);
+      return ListTile(title:Text(v['name']??''),subtitle:Text([_strings(v['areas']).join(' · '),for(final f in fields)if(v['extra']?[f['key']]!=null)'${f['label']}: ${v['extra'][f['key']]}'].where((s)=>s.isNotEmpty).join('\n')),
+          onTap:()=>Get.to(()=>ServiceDetailsScreen(serviceId:d.id)),trailing:phones.isEmpty?null:IconButton(tooltip:'কল করুন',icon:const Icon(Icons.phone_outlined),onPressed:()async{try{if(!await launchUrl(Uri(scheme:'tel',path:phones.first.number)))throw StateError('dialer');}catch(_){if(c.mounted)_message(c,'ডায়ালার খোলা যায়নি।');}}));});});}))
+  ]);}
+}
+
+class _Submit extends StatefulWidget{
+  const _Submit({required this.id,required this.node});final String id;final _Map node;
+  @override State<_Submit> createState()=>_SubmitState();
+}
+class _SubmitState extends State<_Submit>{
+  final community=Get.find<CommunityService>();final values=<String,String>{};
+  String name='',phone='',area='',error='';bool consent=false,busy=false;
+  @override void initState(){super.initState();if(community.availableAreas.contains(community.selectedArea.value))area=community.selectedArea.value;}
+  Future<void> submit()async{
+    final p=phone.trim().replaceAllMapped(RegExp('[০-৯]'),(m)=>'০১২৩৪৫৬৭৮৯'.indexOf(m[0]!).toString()).replaceAll(RegExp(r'[\s()-]'),'');
+    if(name.trim().length<2||!RegExp(r'^\+?[0-9]{3,15}$').hasMatch(p)||area.isEmpty||!consent){setState(()=>error='নাম, ফোন, ইউনিয়ন ও প্রকাশের সম্মতি দিন।');return;}
+    setState((){busy=true;error='';});try{
+      final auth=FirebaseAuth.instance,u=auth.currentUser??(await auth.signInAnonymously()).user;if(u==null)throw StateError('auth');
+      await FirebaseFirestore.instance.collection('directory_suggestions').doc('${u.uid}_${widget.id}').set({
+        'ownerUid':u.uid,'menuId':widget.id,'name':name.trim(),'phone':p,'areas':[area],'extra':{for(final e in values.entries)if(e.value.trim().isNotEmpty)e.key:e.value.trim()},'consent':true,'createdAt':FieldValue.serverTimestamp()});
+      if(mounted){_message(context,'তথ্য জমা হয়েছে। অনুমোদনের পর তালিকায় আসবে।');Navigator.pop(context);}
+    }catch(_){if(mounted)setState(()=>error='জমা হয়নি। একই মেনুতে আগের আবেদন অপেক্ষমাণ থাকলে আরেকটি জমা হবে না। সংযোগ ও অনুমতিও পরীক্ষা করুন।');}finally{if(mounted)setState(()=>busy=false);}
+  }
+  @override Widget build(BuildContext c)=>PopScope(canPop:!busy,child:AlertDialog(title:Text('${widget.node['title']} · তথ্য যোগ'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+    TextField(maxLength:100,decoration:const InputDecoration(labelText:'নাম'),onChanged:(v)=>name=v),
+    TextField(keyboardType:TextInputType.phone,maxLength:30,decoration:const InputDecoration(labelText:'প্রকাশের ফোন'),onChanged:(v)=>phone=v),
+    Obx((){final a=community.availableAreas.where((x)=>x!=_all&&x!=_wide).toSet();return DropdownButton<String>(isExpanded:true,hint:const Text('সেবার ইউনিয়ন'),value:a.contains(area)?area:null,items:[for(final x in a)DropdownMenuItem(value:x,child:Text(x))],onChanged:(v)=>setState(()=>area=v??''));}),
+    for(final f in _fields(widget.node))if(_strings(f['options']).isEmpty)TextField(maxLength:120,decoration:InputDecoration(labelText:f['label']),onChanged:(v)=>values[f['key']]=v)
+    else DropdownButton<String>(isExpanded:true,hint:Text(f['label']),value:values[f['key']],items:[for(final v in _strings(f['options']))DropdownMenuItem(value:v,child:Text(v))],onChanged:(v)=>setState(()=>values[f['key']]=v??'')),
+    CheckboxListTile(contentPadding:EdgeInsets.zero,title:const Text('নাম, নম্বর ও দেওয়া তথ্য প্রকাশে সংশ্লিষ্ট ব্যক্তির সম্মতি আছে'),value:consent,onChanged:(v)=>setState(()=>consent=v??false)),
+    if(error.isNotEmpty)Text(error)
+  ])),actions:[TextButton(onPressed:busy?null:()=>Navigator.pop(c),child:const Text('ফিরুন')),FilledButton(onPressed:busy?null:submit,child:Text(busy?'জমা হচ্ছে…':'জমা দিন'))]));
+}
+
+/// Shows the same menu IDs on Home; old shortcuts survive until the first publish.
+class DirectoryHomeLinks extends StatefulWidget {
+  const DirectoryHomeLinks({super.key,required this.legacy,required this.onAll});
+  final WidgetBuilder legacy;
+  final VoidCallback onAll;
+  @override State<DirectoryHomeLinks> createState()=>_HomeLinks();
+}
+class _HomeLinks extends State<DirectoryHomeLinks>{
+  late final feed=FirebaseFirestore.instance.doc('directory_config/menu').snapshots();
+  @override Widget build(BuildContext c)=>StreamBuilder<DocumentSnapshot<_Map>>(stream:feed,builder:(c,s){
+    if(s.hasError)return widget.legacy(c);
+    if(!s.hasData)return const LinearProgressIndicator(minHeight:2);
+    if(!s.data!.exists)return widget.legacy(c);
+    final tree=Map<String,dynamic>.from(s.data!.data()?['nodes'] as Map? ?? {});
+    final all=tree.entries.toList()..sort((a,b){final k=(a.value['order'] as int).compareTo(b.value['order'] as int);return k==0?a.key.compareTo(b.key):k;});
+    final pinned=all.where((e)=>e.value['home']==true);
+    final items=(pinned.isEmpty?all.where((e)=>e.value['parent']==''):pinned).take(8);
+    return Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+      Row(children:[const Expanded(child:Text('দ্রুত সেবা',style:TextStyle(fontWeight:FontWeight.bold,fontSize:18))),TextButton(onPressed:widget.onAll,child:const Text('সব মেনু'))]),
+      Wrap(spacing:8,runSpacing:8,children:[for(final e in items)ActionChip(avatar:_MenuIcon(key:ValueKey('${e.key}-${e.value['icon']}'),id:e.key,version:e.value['icon'] as int? ?? 0),label:Text(e.value['title']),onPressed:()=>Get.to(()=>ServiceMenuScreen(menuId:e.key),preventDuplicates:false))])
+    ])));
+  });
+}
+
+class _LegacyMenuScreen extends StatelessWidget {
+  const _LegacyMenuScreen({super.key});
 
   // --- Modern Color Palette ---
   static const blue = Color(0xFF1959E8);
@@ -217,8 +364,8 @@ class _DirectoryBanner extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            MenuScreen.blueDark,
-            MenuScreen.blue,
+            _LegacyMenuScreen.blueDark,
+            _LegacyMenuScreen.blue,
             Color(0xFF088395),
           ],
         ),
@@ -261,7 +408,7 @@ class _DirectoryBanner extends StatelessWidget {
                         ),
                         child: Text(
                           'ডিমলা সার্ভিস ডিরেক্টরি',
-                          style: MenuScreen.text(
+                          style: _LegacyMenuScreen.text(
                             11,
                             color: Colors.white,
                             weight: FontWeight.w600,
@@ -271,7 +418,7 @@ class _DirectoryBanner extends StatelessWidget {
                       const SizedBox(height: 8),
                       Text(
                         'প্রয়োজনীয় সব সেবা,\nএখন হাতের মুঠোয়।',
-                        style: MenuScreen.text(
+                        style: _LegacyMenuScreen.text(
                           21,
                           color: Colors.white,
                           weight: FontWeight.w700,
@@ -281,7 +428,7 @@ class _DirectoryBanner extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         'যেকোনো ক্যাটাগরি বেছে নিয়ে বিস্তারিত তথ্য ও যোগাযোগ দেখুন।',
-                        style: MenuScreen.text(
+                        style: _LegacyMenuScreen.text(
                           12.5,
                           color: const Color(0xFFDCEBFF),
                         ),
@@ -322,12 +469,12 @@ class _SearchBox extends StatelessWidget {
 
   static final _defaultBorder = OutlineInputBorder(
     borderRadius: BorderRadius.circular(18),
-    borderSide: const BorderSide(color: MenuScreen.border),
+    borderSide: const BorderSide(color: _LegacyMenuScreen.border),
   );
 
   static final _focusedBorder = OutlineInputBorder(
     borderRadius: BorderRadius.circular(18),
-    borderSide: const BorderSide(color: MenuScreen.blue, width: 1.5),
+    borderSide: const BorderSide(color: _LegacyMenuScreen.blue, width: 1.5),
   );
 
   @override
@@ -337,13 +484,13 @@ class _SearchBox extends StatelessWidget {
       onChanged: (value) => controller.query.value = value,
       textInputAction: TextInputAction.search,
       onSubmitted: (_) => FocusManager.instance.primaryFocus?.unfocus(),
-      cursorColor: MenuScreen.blue,
-      style: MenuScreen.text(14.5, weight: FontWeight.w600),
+      cursorColor: _LegacyMenuScreen.blue,
+      style: _LegacyMenuScreen.text(14.5, weight: FontWeight.w600),
       decoration: InputDecoration(
         hintText: 'সেবার বিভাগ খুঁজুন (যেমন: ডাক্তার, অটো, দোকান)...',
-        hintStyle: MenuScreen.text(
+        hintStyle: _LegacyMenuScreen.text(
           13.5,
-          color: MenuScreen.muted,
+          color: _LegacyMenuScreen.muted,
           weight: FontWeight.w400,
         ),
         filled: true,
@@ -356,7 +503,7 @@ class _SearchBox extends StatelessWidget {
           padding: EdgeInsets.only(left: 12, right: 8),
           child: Icon(
             Icons.search_rounded,
-            color: MenuScreen.blue,
+            color: _LegacyMenuScreen.blue,
             size: 23,
           ),
         ),
@@ -369,7 +516,7 @@ class _SearchBox extends StatelessWidget {
             onPressed: controller.clearSearch,
             icon: const Icon(
               Icons.close_rounded,
-              color: MenuScreen.muted,
+              color: _LegacyMenuScreen.muted,
               size: 20,
             ),
           );
@@ -395,7 +542,7 @@ class _ShortcutsDock extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: MenuScreen.border),
+        border: Border.all(color: _LegacyMenuScreen.border),
       ),
       child: Row(
         children: [
@@ -407,16 +554,16 @@ class _ShortcutsDock extends StatelessWidget {
               onTap: controller.openSaved,
             ),
           ),
-          Container(width: 1, height: 42, color: MenuScreen.border),
+          Container(width: 1, height: 42, color: _LegacyMenuScreen.border),
           Expanded(
             child: _ShortcutItem(
               title: 'সেটিংস',
               icon: Icons.tune_rounded,
-              color: MenuScreen.blue,
+              color: _LegacyMenuScreen.blue,
               onTap: controller.openSettings,
             ),
           ),
-          Container(width: 1, height: 42, color: MenuScreen.border),
+          Container(width: 1, height: 42, color: _LegacyMenuScreen.border),
           Expanded(
             child: _ShortcutItem(
               title: 'সাহায্য',
@@ -471,7 +618,7 @@ class _ShortcutItem extends StatelessWidget {
                 textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: MenuScreen.text(12.5, weight: FontWeight.w700),
+                style: _LegacyMenuScreen.text(12.5, weight: FontWeight.w700),
               ),
             ],
           ),
@@ -499,7 +646,7 @@ class _SectionHeader extends StatelessWidget {
             width: 4,
             height: 20,
             decoration: BoxDecoration(
-              color: MenuScreen.blue,
+              color: _LegacyMenuScreen.blue,
               borderRadius: BorderRadius.circular(4),
             ),
           ),
@@ -507,7 +654,7 @@ class _SectionHeader extends StatelessWidget {
           Expanded(
             child: Text(
               isSearching ? 'খোঁজার ফলাফল' : 'সেবার বিভাগসমূহ',
-              style: MenuScreen.text(19, weight: FontWeight.w700),
+              style: _LegacyMenuScreen.text(19, weight: FontWeight.w700),
             ),
           ),
           if (isSearching)
@@ -523,7 +670,7 @@ class _SectionHeader extends StatelessWidget {
                   ),
                   child: Text(
                     'রিসেট',
-                    style: MenuScreen.text(
+                    style: _LegacyMenuScreen.text(
                       12.5,
                       color: const Color(0xFFE11D48),
                       weight: FontWeight.w600,
@@ -540,9 +687,9 @@ class _SectionHeader extends StatelessWidget {
             ),
             child: Text(
               '$countটি বিভাগ',
-              style: MenuScreen.text(
+              style: _LegacyMenuScreen.text(
                 12,
-                color: MenuScreen.blue,
+                color: _LegacyMenuScreen.blue,
                 weight: FontWeight.w700,
               ),
             ),
@@ -571,7 +718,7 @@ class _CategoryCard extends StatelessWidget {
       color: Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(22),
-        side: const BorderSide(color: MenuScreen.border),
+        side: const BorderSide(color: _LegacyMenuScreen.border),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -633,7 +780,7 @@ class _CategoryCard extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: const Color(0xFFF8FAFC),
                           shape: BoxShape.circle,
-                          border: Border.all(color: MenuScreen.border),
+                          border: Border.all(color: _LegacyMenuScreen.border),
                         ),
                         child: Icon(
                           Icons.arrow_outward_rounded,
@@ -650,7 +797,7 @@ class _CategoryCard extends StatelessWidget {
                         category.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: MenuScreen.text(
+                        style: _LegacyMenuScreen.text(
                           15,
                           weight: FontWeight.w700,
                           height: 1.22,
@@ -659,9 +806,9 @@ class _CategoryCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         'তালিকা দেখুন',
-                        style: MenuScreen.text(
+                        style: _LegacyMenuScreen.text(
                           11.5,
-                          color: MenuScreen.muted,
+                          color: _LegacyMenuScreen.muted,
                           weight: FontWeight.w500,
                         ),
                       ),
@@ -691,7 +838,7 @@ class _EmptyState extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: MenuScreen.border),
+        border: Border.all(color: _LegacyMenuScreen.border),
       ),
       child: Column(
         children: [
@@ -705,26 +852,26 @@ class _EmptyState extends StatelessWidget {
             child: const Icon(
               Icons.search_off_rounded,
               size: 30,
-              color: MenuScreen.blue,
+              color: _LegacyMenuScreen.blue,
             ),
           ),
           const SizedBox(height: 14),
           Text(
             'কোনো বিভাগ পাওয়া যায়নি',
-            style: MenuScreen.text(18, weight: FontWeight.w700),
+            style: _LegacyMenuScreen.text(18, weight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           Text(
             'অন্য কোনো নাম লিখে খুঁজুন অথবা সবগুলো বিভাগ দেখুন।',
             textAlign: TextAlign.center,
-            style: MenuScreen.text(13.5, color: MenuScreen.muted),
+            style: _LegacyMenuScreen.text(13.5, color: _LegacyMenuScreen.muted),
           ),
           const SizedBox(height: 16),
           FilledButton.tonalIcon(
             onPressed: onReset,
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0x1A1959E8),
-              foregroundColor: MenuScreen.blue,
+              foregroundColor: _LegacyMenuScreen.blue,
               padding: const EdgeInsets.symmetric(
                 horizontal: 18,
                 vertical: 10,
@@ -736,9 +883,9 @@ class _EmptyState extends StatelessWidget {
             icon: const Icon(Icons.refresh_rounded, size: 18),
             label: Text(
               'সব বিভাগ দেখুন',
-              style: MenuScreen.text(
+              style: _LegacyMenuScreen.text(
                 13.5,
-                color: MenuScreen.blue,
+                color: _LegacyMenuScreen.blue,
                 weight: FontWeight.w700,
               ),
             ),

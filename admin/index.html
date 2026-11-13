@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="bn">
+<head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+    <title>Smart Dimla · পরিচালনা কেন্দ্র</title>
+    <style>
+        :root{--ink:#102747;--dim:#526985;--line:#dbe4f0;--blue:#2459db;--bg:#f3f6fc;color-scheme:light}
+        *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;font:15px/1.55 system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+        h1,h2,h3,p{margin:0}p,small{color:var(--dim)}a{color:#174bae}button,input,select,textarea{font:inherit}
+        button{border:0;border-radius:12px;padding:10px 16px;min-height:44px;cursor:pointer;background:var(--blue);color:white;font-weight:650}
+        button.alt{background:#eaf0ff;color:#234981}button.red{background:#fff0ef;color:#aa2419}button:disabled{opacity:.55;cursor:wait}
+        :focus-visible{outline:3px solid #df9f20;outline-offset:2px}label{display:grid;gap:5px;margin:10px 0;font-weight:600}
+        input:not([type=checkbox]),select,textarea{width:100%;min-width:0;padding:10px 12px;border:1px solid #c7d4e5;border-radius:10px;background:white;color:var(--ink)}
+        textarea{min-height:76px;resize:vertical}label.check{display:flex;align-items:center;gap:10px}input[type=checkbox]{width:18px;height:18px}
+        nav{width:218px;position:fixed;inset:0 auto 0 0;background:#10264c;color:white;padding:24px 14px}nav b{display:block;font-size:22px;margin:0 8px 3px}
+        nav small{display:block;color:#afc3e8;margin:0 8px 24px}nav button{display:block;width:100%;text-align:left;margin:5px 0;background:transparent;color:#c6d5ef}
+        nav button[aria-current=page]{background:#2e60dc;color:white}.shell{margin-left:218px}header,.bar,.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+        header{padding:15px 4%;background:white;border-bottom:1px solid var(--line)}main{max-width:1250px;margin:auto;padding:26px 4% 70px}
+        .hero{background:linear-gradient(115deg,#152c60,#244fbd 75%,#17779e);color:white;border-radius:20px;padding:26px;margin-bottom:18px}
+        .hero small,.hero p{color:#e1eaff}.hero h1{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(230px,100%),1fr));gap:13px;margin:15px 0}
+        .card,.panel,.tile{background:white;border:1px solid var(--line);border-radius:16px;padding:18px;min-width:0;overflow-wrap:anywhere}
+        .tile{text-align:left;color:var(--ink)}.tile small{display:block;margin-top:4px}.tile:hover{border-color:#8ba9eb}.card{display:flex;flex-direction:column;gap:7px}
+        .card .row:last-child{border-top:1px solid var(--line);padding-top:10px;margin-top:auto}.badge{font-size:12px;color:#19674d;background:#e4f4eb;padding:4px 9px;border-radius:20px}
+        .draft{color:#865708;background:#fff0ce}.photo{height:132px;width:100%;object-fit:contain;background:#f5f7fc;border-radius:10px}
+        .filters{display:grid;grid-template-columns:1fr auto auto;gap:9px;margin:16px 0}.links,.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .login{max-width:440px;margin:10vh auto;padding:25px}.login button{width:100%;margin-top:8px}.login h1{font-size:26px}
+        details{margin:16px 0}summary{cursor:pointer;font-weight:650}.diag{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.65 ui-monospace,monospace}
+        dialog{border:0;border-radius:18px;color:var(--ink);width:min(590px,96vw);max-height:90dvh;padding:0}dialog::backdrop{background:#10244885}
+        dialog form{padding:22px}dialog footer{position:sticky;bottom:0;background:white;padding:12px 0 0;border-top:1px solid var(--line)}
+        #notice,.error{white-space:pre-line;border-radius:12px;padding:12px 15px;background:#fff2dd;color:#744412;overflow-wrap:anywhere}
+        #notice{position:fixed;right:16px;bottom:16px;z-index:5;max-width:min(500px,92vw);box-shadow:0 5px 25px #10244821}
+        #notice.good{background:#e2f5eb;color:#16573c}dl{display:grid;grid-template-columns:auto 1fr;gap:10px}dd{margin:0;text-align:right}
+        @media(max-width:760px){nav{position:static;width:auto;padding:12px}nav b{font-size:17px}nav small{display:none}nav .menu{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}nav button{font-size:12px;text-align:center;padding:6px}.shell{margin:0}main{padding:16px 12px 75px}.filters{grid-template-columns:1fr auto}.filters input{grid-column:1/-1}.hero{padding:18px}}
+    </style>
+</head><body>
+<section id="login" class="panel login"><small>SMART DIMLA / ADMIN</small><h1>পরিচালনা কেন্দ্রে প্রবেশ</h1>
+    <form id="signin"><label>ইমেইল<input id="email" type="email" required autocomplete="username"></label><label>পাসওয়ার্ড<input id="pass" type="password" required autocomplete="current-password"></label><button id="enter" disabled>প্রবেশ করুন</button></form></section>
+<div id="workspace" hidden><nav><b>Smart Dimla</b><small>পরিচালনা কেন্দ্র</small><div class="menu">
+    <button data-page="home">ড্যাশবোর্ড</button><button data-page="directory">সেবা মেনু</button><button data-page="services">স্থানীয় সেবা</button><button data-page="products">Hello Store</button><button data-page="setup">Store setup</button></div></nav>
+    <div class="shell"><header><strong id="heading"></strong><div class="actions"><small id="who"></small><button id="logout" class="alt">লগআউট</button></div></header>
+        <main><section id="home"><div class="hero"><small>ডিমলা · পরিচালনা কেন্দ্র</small><h1>আজ কী আপডেট করবেন?</h1><p>সেবার নম্বর ঠিক করুন, পণ্য সাজান বা দোকানের প্রস্তুতি দেখুন।</p></div><div id="shortcuts" class="grid"></div></section>
+            <section id="directory" class="panel" hidden></section><section id="catalog" hidden><div class="bar"><div><button id="back" class="alt" hidden>← বিভাগ</button><h2 id="title"></h2><small id="count"></small></div><button id="all">সব দেখুন</button><button id="add" hidden>＋ নতুন যোগ করুন</button></div>
+                <div id="categories" class="grid"></div><div id="listing" hidden><div class="filters"><input id="search" type="search" aria-label="তালিকায় খুঁজুন" placeholder="লোড হওয়া তালিকায় খুঁজুন…"><select id="status" aria-label="প্রকাশের অবস্থা"><option value="all">সব অবস্থা</option><option value="yes">প্রকাশিত</option><option value="no">ড্রাফট</option></select><button id="reload" class="alt">Refresh</button></div><div id="cards" class="grid"></div><button id="more" class="alt" hidden>আরও ২৫টি দেখুন</button></div></section>
+            <section id="setup" class="panel" hidden><h2>Store setup</h2><dl id="stats"></dl><div class="actions"><button id="init" disabled>প্রাথমিক setup করুন</button><button id="check" class="alt">অবস্থা দেখুন</button></div><p>নতুন store-এ অর্ডার বন্ধ থাকবে। Delivery ও policies প্রস্তুত হলে চালু করুন।</p></section>
+            <details id="connection" class="panel"><summary>Firebase সংযোগ ও অনুমতি</summary><p class="diag" id="diag"></p><div class="links"><a id="rulesLink" target="_blank" rel="noopener noreferrer">এই project-এর Rules খুলুন ↗</a><button id="verify" class="alt">পরিচয় যাচাই</button></div></details>
+        </main></div></div>
+<dialog id="editor"><form id="entry"><h2 id="formTitle"></h2><div id="fields"></div><p id="formError" class="error" hidden></p><footer class="row"><button id="close" type="button" class="alt">ফিরে যান</button><button type="submit">সংরক্ষণ করুন</button></footer></form></dialog>
+<div id="notice" role="status" aria-live="polite">সংযোগ হচ্ছে…</div>
+<script type="module">
+    const $=id=>document.getElementById(id);
+    const UID='bvRZznR5vfV0SK6z0AVVjTzjzku2';
+    const cfg={apiKey:'AIzaSyC074gXBeW1MQyt833pdwGXWXKVcyYvZoQ',authDomain:'smart-dimla.firebaseapp.com',projectId:'smart-dimla',storageBucket:'smart-dimla.firebasestorage.app',messagingSenderId:'164777411610',appId:'1:164777411610:web:17c3b5231a224c3a61fda3'};
+    const services={emergency:'জরুরি সেবা',local_transport:'অটো, ভ্যান ও রিকশা',vehicle_rental:'গাড়ি ও মালবাহী পরিবহন',long_distance_transport:'বাস ও দূরপাল্লার যাতায়াত',health:'ডাক্তার ও স্বাস্থ্যসেবা',local_shops:'মুদি ও স্থানীয় দোকান',food:'খাবার ও রেস্টুরেন্ট',home_services:'বাড়ির কাজ ও মিস্ত্রি',repair:'মোবাইল ও যন্ত্র মেরামত',agriculture:'কৃষিসেবা',livestock:'পশু ও প্রাণিসম্পদ',education:'শিক্ষা ও প্রশিক্ষণ',jobs_workers:'চাকরি ও কর্মী',rent_property:'বাসা ও দোকান ভাড়া',courier_documents:'কুরিয়ার ও অনলাইন সেবা',financial_directory:'ব্যাংক ও আর্থিক যোগাযোগ',civic_information:'সরকারি ও নাগরিক তথ্য',events:'অনুষ্ঠান ও আয়োজন',tourism:'দর্শনীয় স্থান',local_updates:'স্থানীয় খবর ও ঘোষণা'};
+    const products={grocery:'মুদি',food:'খাবার',household:'গৃহস্থালি',fashion:'পোশাক',electronics:'ইলেকট্রনিক্স',other:'অন্যান্য'};
+    const types={local_transport:{auto:'অটো / ইজিবাইক',van:'ভ্যান',rickshaw:'রিকশা',cargo:'মালবাহী গাড়ি'},emergency:{ambulance:'অ্যাম্বুলেন্স',emergency_hospital:'জরুরি হাসপাতাল',fire_service:'ফায়ার সার্ভিস',police:'পুলিশ',blood_donor:'রক্তদাতা',night_pharmacy:'রাতের ফার্মেসি',electricity:'বিদ্যুৎ অভিযোগ',disaster:'দুর্যোগ সহায়তা',national_hotline:'জাতীয় hotline'}};
+    const titles={directory:'সেবা মেনু',home:'ড্যাশবোর্ড',services:'স্থানীয় সেবা',products:'Hello Store',setup:'Store setup'};
+    const node=(tag,txt='',cls='')=>{const n=document.createElement(tag);n.textContent=txt;n.className=cls;return n};
+    const btn=(txt,fn,cls='')=>{const n=node('button',txt,cls);n.type='button';n.onclick=fn;return n};
+    const visible=(id,show)=>$(id).hidden=!show;
+    let timer;
+    function say(t,good=false){clearTimeout(timer);$('notice').textContent=t;$('notice').className=good?'good':'';visible('notice',true);if(good)timer=setTimeout(()=>visible('notice',false),5500)}
+    const stable=d=>JSON.stringify(d,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
+    const digits=s=>String(s).replace(/[০-৯]/g,c=>'০১২৩৪৫৬৭৮৯'.indexOf(c));
+    function money(s){s=digits(s);if(!/^\d+(\.\d{1,2})?$/.test(s))throw Error('দামে সর্বোচ্চ দুই দশমিক ঘর দিন।');const [a,b='']=s.split('.');return Number(a)*100+Number(b.padEnd(2,'0'))}
+    function https(s){if(!s)return '';let u;try{u=new URL(s)}catch{}if(!u||u.protocol!=='https:')throw Error('লিংক https:// দিয়ে শুরু হতে হবে।');return u.href}
+    // BEGIN GENERATED DIRECTORY
+    // Directory model. Keys survive title, icon and display-order changes.
+    const ALL='পুরো ডিমলা';
+    const cleanList=s=>[...new Set(String(s||'').split(/[,，\n]/).map(v=>v.trim()).filter(Boolean))];
+    function schema(raw){
+     const fields=raw.trim()?raw.trim().split('\n').map(row=>{
+       const p=row.split('|').map(x=>x.trim());
+       if(p.length<2||p.length>3||!/^[a-z][a-z0-9_]{0,19}$/.test(p[0])||['constructor','prototype'].includes(p[0])||!p[1]||p[1].length>50)throw Error('ঘরের ফরম্যাট: key | নাম | পছন্দ১,পছন্দ২');
+       const options=cleanList(p[2]);if(options.length>25||options.some(s=>s.length>80))throw Error('পছন্দের তালিকা ছোট করুন।');
+       return {key:p[0],label:p[1],options};
+     }):[];
+     if(fields.length>5||new Set(fields.map(f=>f.key)).size!==fields.length)throw Error('সর্বোচ্চ পাঁচটি ঘর দিন; প্রতিটির key আলাদা হবে।');
+     return fields;
+    }
+    function change(tree,id,next){
+     const out={...tree};if(!next){if(Object.values(out).some(n=>n.parent===id))throw Error('আগে ভেতরের মেনু সরান।');delete out[id];return out}
+     if(tree[id]&&tree[id].kind!==next.kind)throw Error('আগের মেনুর ধরন বদলানো যাবে না।');
+     if(!next.title||next.title.length>70||!['group','list'].includes(next.kind))throw Error('নাম ও ধরন ঠিক করুন।');
+     let p=next.parent;const seen=new Set([id]);while(p){if(seen.has(p)||!out[p]||out[p].kind!=='group')throw Error('এই অবস্থানে মেনু রাখা যাবে না।');seen.add(p);p=out[p].parent}
+     if(Object.keys(out).length>=100&&!tree[id])throw Error('এই সংস্করণে সর্বোচ্চ ১০০টি মেনু।');
+     out[id]=next;return out;
+    }
+    function entryData(n,areas,{name,phone,coverage,values,consent}){
+     name=name.trim();phone=phone.trim().replace(/[০-৯]/g,c=>'০১২৩৪৫৬৭৮৯'.indexOf(c)).replace(/[\s()-]/g,'');
+     if(name.length<2||name.length>100||!/^\+?[0-9]{3,15}$/.test(phone)||!consent)throw Error('নাম, সঠিক ফোন ও প্রকাশের সম্মতি প্রয়োজন।');
+     if(!coverage.length||coverage.length>15||coverage.some(a=>a!==ALL&&!areas.includes(a))||(coverage.includes(ALL)&&coverage.length>1))throw Error('তালিকা থেকে সেবার এলাকা বাছুন।');
+     const extra={};for(const f of n.fields){const x=String(values[f.key]||'').trim();if(x.length>120||(x&&f.options.length&&!f.options.includes(x)))throw Error(f.label+' ঠিক করুন।');if(x)extra[f.key]=x}
+     return {name,phone,areas:coverage,extra};
+    }
+
+    function legacyTree(categories){
+     return Object.fromEntries(Object.entries(categories).map(([id,title],i)=>[id,{
+     title,parent:'',kind:'list',order:(i+1)*10,fields:[],fieldKeys:[],accept:false,icon:0,home:false
+     }]));
+    }
+
+    async function showDirectory({F,db,guard,root,current,services}){
+     const ref=(...p)=>F.doc(db,...p), menu=ref('directory_config','menu'), loc=ref('app_config','locations');
+     const el=(t,s)=>{const x=document.createElement(t);if(s)x.textContent=s;return x};
+     const clear=x=>x.replaceChildren(),read=r=>F.getDocFromServer(r);
+     const [m,l]=await Promise.all([read(menu),read(loc)]);if(!current())return;
+     let tree=m.data()?.nodes||{},areas=(l.data()?.areas||[]).filter(a=>a!=='সব এলাকা'&&a!==ALL);
+     const note=el('p'),bar=el('div'),pane=el('section');note.setAttribute('role','status');bar.className='actions';root.replaceChildren(el('h2','সেবা মেনু পরিচালনা'),bar,note,pane);
+     let working=false;
+     function button(box,title,action){const b=el('button',title);b.type='button';box.append(b);b.onclick=async()=>{if(working)return;working=true;root.inert=true;note.textContent='';try{guard();await action()}catch(e){note.textContent=e.message||String(e)}finally{working=false;root.inert=false}};return b}
+     function input(box,label,value='',choices=null){const lab=el('label',label),v=el(choices?'select':'input');if(choices)for(const [id,title] of choices)v.add(new Option(title,id));v.value=value;lab.append(v);box.append(lab);return v}
+     function multi(box,title,opts,selected){const fs=el('fieldset');fs.append(el('legend',title));box.append(fs);const inputs=opts.map(a=>{const lab=el('label',a),x=el('input');x.type='checkbox';lab.className='check';x.checked=selected.includes(a);lab.prepend(x);fs.append(lab);return [a,x]});return ()=>inputs.filter(([,x])=>x.checked).map(([a])=>a)}
+     function checkOld(old,now){if(normal(old)!==normal(now))throw Error('তথ্য বদলেছে। মেনু আবার খুলুন।')}
+     const sorted=()=>Object.entries(tree).sort((a,b)=>a[1].order-b[1].order||a[1].title.localeCompare(b[1].title));
+     const normal=v=>JSON.stringify(v,(_,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
+     const ok=t=>note.textContent=t;
+     async function icon(file){
+       if(!['image/png','image/jpeg','image/webp'].includes(file.type)||file.size>2*1024*1024)throw Error('PNG/JPG/WebP দিন, সর্বোচ্চ ২ MB।');
+       const bm=await createImageBitmap(file),c=document.createElement('canvas');c.width=c.height=80;const k=80/Math.max(bm.width,bm.height);
+       c.getContext('2d').drawImage(bm,(80-bm.width*k)/2,(80-bm.height*k)/2,bm.width*k,bm.height*k);bm.close();
+       return c.toDataURL('image/png').split(',')[1];
+     }
+     function menus(){clear(pane);button(pane,'＋ মেনু',()=>menuForm());for(const [id,n] of sorted()){
+       const card=el('div');card.className='panel';card.append(el('strong',(tree[n.parent]?.title||'মূল মেনু')+' › '+n.title),el('p',n.kind==='group'?'উপমেনু':'সেবার তালিকা'));
+       button(card,'সম্পাদনা',()=>menuForm(id));if(n.kind==='list')button(card,'সেবার তালিকা',()=>records(id));
+       button(card,'মেনু মুছুন',async()=>{if(!confirm(n.title+' মেনু মুছবেন?'))return;
+        if(n.kind==='list'){const q=await F.getDocsFromServer(F.query(F.collection(db,'services'),F.where('categoryId','==',id),F.limit(1)));if(!q.empty)throw Error('এই মেনুতে সেবা আছে। আগে সেগুলি সরান অথবা মেনুটি রাখুন।');
+        const p=await F.getDocsFromServer(F.query(F.collection(db,'directory_suggestions'),F.where('menuId','==',id),F.limit(1)));if(!p.empty)throw Error('আগে জমা পড়া তথ্য পর্যালোচনা করুন।')}
+        tree=await F.runTransaction(db,async tx=>{const s=await tx.get(menu),ns=s.data()?.nodes||{};checkOld(n,ns[id]);const out=change(ns,id,null);tx.set(menu,{nodes:out});tx.delete(ref('directory_icons',id));return out});menus();ok('মেনু মুছে গেছে।')});pane.append(card)}
+     }
+     function menuForm(id=''){clear(pane);const n=tree[id]||{parent:'',kind:'list',order:0,title:'',fields:[],accept:false};const name=input(pane,'মেনুর নাম',n.title),parent=input(pane,'অবস্থান',n.parent,[['','মূল মেনু'],...sorted().filter(([k,v])=>v.kind==='group'&&k!==id).map(([k,v])=>[k,v.title])]),kind=input(pane,'চাপলে খুলবে',n.kind,[['group','আরও মেনু'],['list','সেবার তালিকা']]);kind.disabled=!!id;
+     const order=input(pane,'ক্রম',n.order);order.type='number';const accept=input(pane,'ব্যবহারকারী তথ্য দিতে পারবেন',n.accept?'yes':'no',[['no','না'],['yes','হ্যাঁ']]);
+     const fieldBox=el('fieldset'),rows=[];fieldBox.append(el('legend','ফর্ম ও তালিকার বাড়তি ঘর'));pane.append(fieldBox);
+     function addField(f){if(rows.length>=5){ok('সর্বোচ্চ পাঁচটি ঘর রাখা যায়।');return}
+       const row=el('div');fieldBox.append(row);const key=f?.key||('f'+crypto.randomUUID().slice(0,8));
+       const label=input(row,'ঘরের নাম (যেমন স্ট্যান্ড)',f?.label||'');
+       const opts=input(row,'বাছাইয়ের অপশন, কমা দিয়ে (সাধারণ লেখার ঘর হলে ফাঁকা)',(f?.options||[]).join(', '));
+       const obj={key,label,opts};rows.push(obj);if(!f)button(row,'ঘর বাদ দিন',()=>{rows.splice(rows.indexOf(obj),1);row.remove()})}
+     n.fields.forEach(addField);button(fieldBox,'＋ ঘর যোগ',()=>addField());button(fieldBox,'রক্তের গ্রুপ ঘর যোগ',()=>{if(!rows.some(r=>r.key==='blood'))addField({key:'blood',label:'রক্তের গ্রুপ',options:['A+','A-','B+','B-','AB+','AB-','O+','O-']})});
+     const showFields=()=>{fieldBox.hidden=kind.value!=='list';accept.parentElement.hidden=kind.value!=='list'};kind.onchange=showFields;showFields();
+     const home=input(pane,'হোমে শর্টকাট',n.home?'yes':'no',[['no','না'],['yes','হ্যাঁ']]);
+     const file=input(pane,'নতুন আইকন (ঐচ্ছিক)');file.type='file';file.accept='image/png,image/jpeg,image/webp';
+     const legacy=!id?input(pane,'আগের তালিকার সঙ্গে যুক্ত করুন (ঐচ্ছিক)','',[['','নতুন মেনু'],...Object.entries(services).filter(([k])=>!tree[k])]):null;
+     button(pane,'প্রকাশ করুন',async()=>{const key=id||legacy?.value||F.doc(F.collection(db,'directory_icons')).id;
+     const fs=kind.value==='list'?schema(rows.map(r=>{if(!r.label.value.trim()||/[|\n]/.test(r.label.value+r.opts.value))throw Error('ঘরের নাম ও পছন্দ ঠিক করুন।');return [r.key,r.label.value,r.opts.value].join('|')}).join('\n')):[],num=Number(order.value);if(!Number.isInteger(num)||Math.abs(num)>9999)throw Error('সঠিক ক্রম দিন।');
+     if(legacy?.value&&kind.value!=='list')throw Error('আগের তালিকা যুক্ত করতে তালিকা ধরন বাছুন।');
+     const b64=file.files[0]?await icon(file.files[0]):null;
+     const next={title:name.value.trim(),parent:parent.value,kind:kind.value,order:num,home:home.value==='yes',fields:fs,fieldKeys:fs.map(f=>f.key),accept:kind.value==='list'&&accept.value==='yes',icon:n.icon||0};
+     tree=await F.runTransaction(db,async tx=>{const s=await tx.get(menu),ns=s.data()?.nodes||{};checkOld(id?n:undefined,ns[key]);
+     if(id&&n.fields.some(f=>!fs.some(v=>v.key===f.key)))throw Error('আগের ঘরের key রাখুন; প্রদর্শিত নাম বদলাতে পারেন।');
+     if(b64){next.icon=(n.icon||0)+1;tx.set(ref('directory_icons',key),{png:b64})}
+     const initial=s.exists()?ns:legacyTree(services);const out=change(initial,key,next);tx.set(menu,{nodes:out});return out});menus();ok('প্রকাশ হয়েছে।')});button(pane,'ফিরুন',menus);
+     }
+     function locations(){clear(pane);pane.append(el('p','প্রতি লাইনে একটি ইউনিয়ন দিন। পুরোনো তথ্য ঠিক রাখতে ব্যবহৃত নাম অপরিবর্তিত রাখুন।'));const a=el('textarea');a.rows=10;a.value=areas.join('\n');pane.append(a);
+     button(pane,'এলাকা সংরক্ষণ',async()=>{const next=cleanList(a.value);if(next.length>60||next.some(x=>x.length>60||[ALL,'সব এলাকা'].includes(x))||areas.some(x=>!next.includes(x)))throw Error('আগের নাম রাখুন এবং বৈধ ইউনিয়ন দিন।');
+     await F.runTransaction(db,async tx=>{const s=await tx.get(loc);checkOld(areas,(s.data()?.areas||[]).filter(a=>a!=='সব এলাকা'&&a!==ALL));tx.set(loc,{areas:next},{merge:true})});areas=next;ok('ইউনিয়ন সংরক্ষিত।')})}
+     async function records(id){clear(pane);pane.append(el('h3',tree[id].title));button(pane,'＋ সেবা',()=>entry(id));const q=await F.getDocsFromServer(F.query(F.collection(db,'services'),F.where('categoryId','==',id)));if(!current())return;
+     for(const d of q.docs){const b=el('div');b.className='panel';b.append(el('strong',d.data().name));button(b,'সম্পাদনা',()=>entry(id,d));button(b,'অন্য মেনুতে সরান',()=>{clear(pane);const opts=sorted().filter(([k,v])=>k!==id&&v.kind==='list').map(([k,v])=>[k,v.title]);
+     if(!opts.length){pane.append(el('p','আগে আরেকটি তালিকা মেনু বানান।'));button(pane,'ফিরুন',()=>records(id));return}
+     const target=input(pane,'গন্তব্য',opts[0][0],opts);button(pane,'সরান',async()=>{const key=target.value;await F.runTransaction(db,async tx=>{const cat=await tx.get(menu),old=await tx.get(d.ref);checkOld(d.data(),old.data());if(cat.data()?.nodes?.[key]?.kind!=='list')throw Error('গন্তব্যটি বদলেছে।');tx.update(d.ref,{categoryId:key,updatedAt:F.serverTimestamp()})});await records(id)});button(pane,'ফিরুন',()=>records(id))});button(b,'সেবা মুছুন',async()=>{if(!confirm(d.data().name+' মুছবেন?'))return;await F.runTransaction(db,async tx=>{const s=await tx.get(d.ref);checkOld(d.data(),s.data());tx.delete(d.ref)});await records(id)});pane.append(b)}}
+     async function inbox(){clear(pane);pane.append(el('h3','জমা পড়া তথ্য'));const q=await F.getDocsFromServer(F.query(F.collection(db,'directory_suggestions'),F.limit(50)));if(!current())return;
+     if(q.empty)pane.append(el('p','কোনো আবেদন নেই।'));for(const d of q.docs){const v=d.data(),b=el('div');b.className='panel';b.append(el('strong',(tree[v.menuId]?.title||'সরানো মেনু')+' · '+v.name));if(tree[v.menuId])button(b,'দেখুন ও যাচাই করুন',()=>entry(v.menuId,null,d));
+     button(b,'বাতিল',async()=>{if(confirm('এই আবেদনটি বাতিল করবেন?')){await F.runTransaction(db,async tx=>{const s=await tx.get(d.ref);checkOld(d.data(),s.data());tx.delete(d.ref)});await inbox()}});pane.append(b)}}
+     function entry(id,old=null,pending=null){const n=tree[id],v=old?.data()||pending?.data()||{};clear(pane);
+     if(old&&v.phones?.length)throw Error('একাধিক নম্বরযুক্ত পুরোনো এন্ট্রি এই ফর্ম দিয়ে বদলানো যাবে না।');
+     pane.append(el('h3',n.title+' · '+(pending?'আবেদন পর্যালোচনা':'সেবার তথ্য')));const name=input(pane,'নাম',v.name),phone=input(pane,'ফোন',v.phone);
+     const cover=multi(pane,'যেখানে সেবা দেন',[...new Set([...areas,...(v.areas||[]),ALL])],v.areas||[]),ex={};
+     for(const f of n.fields)ex[f.key]=input(pane,f.label,v.extra?.[f.key]||'',f.options.length?[['','বাছুন'],...f.options.map(s=>[s,s])]:null);
+     const consent=multi(pane,'প্রকাশের আগে',['প্রকাশের সম্মতি যাচাই করেছি'],[]);
+     const r=old?.ref||F.doc(F.collection(db,'services'));
+     button(pane,pending?'অনুমোদন ও প্রকাশ':'সংরক্ষণ ও প্রকাশ',async()=>{const data=entryData(n,[...areas,...(old?.data()?.areas||[])],{name:name.value,phone:phone.value,coverage:cover(),values:Object.fromEntries(Object.entries(ex).map(([k,x])=>[k,x.value])),consent:consent().length>0});
+     await F.runTransaction(db,async tx=>{const s=await tx.get(menu);checkOld(n,s.data()?.nodes?.[id]);const prior=await tx.get(r);checkOld(old?.data(),prior.data());if(pending){const p=await tx.get(pending.ref);if(!p.exists())throw Error('আবেদন আগেই নিষ্পত্তি হয়েছে।');checkOld(v,p.data());tx.delete(pending.ref)}
+     const write={...data,categoryId:id,subtitle:Object.values(data.extra).join(' · '),phoneKind:'personal',phonePublic:true,phoneConsent:true,phoneConsentAt:F.serverTimestamp(),verified:false,published:true,updatedAt:F.serverTimestamp(),...(old?{}:{createdAt:F.serverTimestamp()})};if(old)tx.update(r,write);else tx.set(r,write)});
+     if(pending)await inbox();else await records(id);ok('প্রকাশ হয়েছে।')});button(pane,'ফিরুন',()=>pending?inbox():records(id))}
+     button(bar,'মেনু',menus);button(bar,'ইউনিয়ন',locations);button(bar,'জমা পড়া তথ্য',inbox);menus();
+    }
+
+    // END GENERATED DIRECTORY
+    try{
+     const base='https://www.gstatic.com/firebasejs/13.1.0/';
+     const [A,H,F]=await Promise.all(['app','auth','firestore'].map(k=>import(base+'firebase-'+k+'.js')));
+     const app=A.initializeApp(cfg),auth=H.getAuth(app),db=F.getFirestore(app),project=app.options.projectId;
+     await H.setPersistence(auth,H.browserSessionPersistence);
+     $('rulesLink').href='https://console.firebase.google.com/project/'+encodeURIComponent(project)+'/firestore/rules';
+     let claims=null,page='home',category=null,rows=[],cursor=null,busy=false,epoch=0,session=0,phase='',last='',editing=null,ref=null,dirty=false;
+     function diag(){const u=auth.currentUser;$('diag').textContent=['Project: '+project,'Database: (default)','Admin UID: '+(u?.uid||'—'),'Sign-in: '+(claims?.signInProvider||'—'),'Token project: '+(claims?.claims?.aud||'—'),last].filter(Boolean).join('\n')}
+     function guard(){if(!auth.currentUser||auth.currentUser.uid!==UID||claims?.signInProvider!=='password'||claims?.claims?.aud!==project)throw Error('এই project-এর অনুমোদিত Email/Password admin দিয়ে প্রবেশ করুন।')}
+     function fail(e){const c=e?.code||'';const t=c==='permission-denied'?'Firebase অনুমতি দেয়নি। নিচে “এই project-এর Rules খুলুন” চাপুন।':c==='auth/invalid-credential'?'ইমেইল বা পাসওয়ার্ড মেলেনি।':e?.message||'কাজটি হয়নি।';
+     last=[phase,c,t].filter(Boolean).join(' · ');diag();say(last);if(c==='permission-denied')$('connection').open=true;if($('editor').open){$('formError').textContent=last;visible('formError',true)}}
+     async function job(label,fn){if(busy)return;busy=true;phase=label;const s=session;
+     document.body.setAttribute('aria-busy','true');$('entry').inert=true;try{await fn()}catch(e){if(s===session||!auth.currentUser)fail(e)}finally{busy=false;phase='';$('entry').inert=false;document.body.removeAttribute('aria-busy')}}
+     function tile(label,sub,fn){const b=btn('',fn,'tile');b.append(node('strong',label),node('small',sub));return b}
+     function nav(next){guard();page=next;category=null;rows=[];cursor=null;epoch++;$('heading').textContent=titles[next];
+     for(const n of document.querySelectorAll('[data-page]')){if(n.dataset.page===next)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current')}
+     visible('home',next==='home');visible('setup',next==='setup');visible('catalog',next==='services'||next==='products');visible('directory',next==='directory');if(next==='directory'){const g=epoch;return showDirectory({F,db,guard,root:$('directory'),current:()=>epoch===g,services})}if(next==='setup')return setupRead();
+     if(next==='services'||next==='products'){const map=next==='services'?services:products;$('title').textContent=titles[next]+' · বিভাগ';$('count').textContent='একটি বিভাগ বেছে নিন';visible('categories',true);visible('listing',false);visible('back',false);visible('all',true);visible('add',false);
+     $('categories').replaceChildren(...Object.entries(map).map(([k,v])=>tile(v,'তালিকা দেখুন →',()=>job('তালিকা',()=>select(k))))) }}
+     for(const n of document.querySelectorAll('[data-page]'))n.onclick=()=>job('বিভাগ',()=>nav(n.dataset.page));
+     $('shortcuts').replaceChildren(...['services','products','setup'].map((k,i)=>tile(titles[k],['যোগাযোগ ও সেবার তালিকা','দাম, স্টক ও নির্বাচিত পণ্য','দোকান ও নীতিমালার অবস্থা'][i],()=>job(titles[k],()=>nav(k)))));
+     function select(k){category=k;rows=[];cursor=null;epoch++;$('search').value='';$('status').value='all';$('title').textContent=(page==='services'?services:products)[k]||titles[page];
+     visible('categories',false);visible('listing',true);visible('all',false);visible('back',true);visible('add',true);visible('more',false);$('cards').replaceChildren();return load()}
+     async function load(more=false){guard();const g=epoch,ls=[F.orderBy(F.documentId()),F.limit(25)];if(category)ls.push(F.where('categoryId','==',category));if(more&&cursor)ls.push(F.startAfter(cursor));
+     $('count').textContent='তথ্য আনা হচ্ছে…';phase='তালিকা পড়া: '+page;
+     try{const q=await F.getDocsFromServer(F.query(F.collection(db,page),...ls));if(g!==epoch)return;
+     const next=q.docs.map(s=>({id:s.id,d:s.data()}));rows=more?[...rows,...next]:next;cursor=q.docs.at(-1)||null;visible('more',q.size===25);render()}
+     catch(e){if(g===epoch)$('count').textContent='তালিকা আপডেট হয়নি। Refresh চাপুন।';throw e}}
+     function render(){const isS=page==='services',find=$('search').value.trim().toLowerCase(),status=$('status').value,shown=rows.filter(({d})=>[d.name,d.address,...(Array.isArray(d.areas)?d.areas:[])].join(' ').toLowerCase().includes(find)&&(status==='all'||(d.published===true)===(status==='yes')));
+     $('count').textContent='লোড হওয়া '+rows.length+'টির মধ্যে '+shown.length+'টি দেখাচ্ছে';const box=$('cards');box.replaceChildren();
+     if(!shown.length)box.append(node('p','কোনো তথ্য পাওয়া যায়নি। ফিল্টার বদলান বা নতুন তথ্য যোগ করুন।','panel'));
+     for(const item of shown){const d=item.d,c=node('article','','card'),head=node('div','','row'),actions=node('div','','actions');
+     head.append(node('small',(isS?services:products)[d.categoryId]||''),node('span',d.published?'প্রকাশিত':'ড্রাফট','badge'+(d.published?'':' draft')));
+     if(!isS&&/^https:\/\//i.test(d.imageUrl||'')){const img=node('img','','photo');img.alt=d.name||'পণ্য';img.loading='lazy';img.decoding='async';img.src=d.imageUrl;img.onerror=()=>img.remove();c.append(img)}
+     c.append(head,node('h3',d.name||'নাম নেই'),node('p',isS?(d.subtitle||d.address||''):('৳'+((d.priceMinor||0)/100).toLocaleString('bn-BD')+' · '+(d.unit||''))),node('small',isS?(d.areas||[]).join(' • '):'স্টক: '+(d.stockQty??0)));
+     actions.append(btn('সম্পাদনা',()=>openForm(item),'alt'));if(isS)actions.append(btn('মুছুন',()=>remove(item),'red'));const foot=node('div','','row');foot.append(actions);c.append(foot);box.append(c)}}
+     function remove(item){if(busy||page!=='services'||!confirm('“'+(item.d.name||item.id)+'” স্থায়ীভাবে মুছবেন? এটি ফিরিয়ে আনা যাবে না।'))return;
+     job('সেবা মুছুন',async()=>{guard();const g=epoch,path='services/'+item.id,r=F.doc(db,'services',item.id);
+     const removed=await F.runTransaction(db,async tx=>{phase='সেবা পড়া: '+path;const snap=await tx.get(r);if(!snap.exists())return false;
+     if(stable(snap.data())!==stable(item.d))throw Error('তথ্য বদলেছে। Refresh করে দেখে আবার মুছুন।');phase='Delete জমা: '+path;tx.delete(r);return true});
+     if(epoch!==g)return;rows=rows.filter(v=>v.id!==item.id);render();last='';diag();say(removed?'সেবাটি মুছে গেছে।':'সেবাটি আগেই মুছে গেছে।',true)})}
+     $('back').onclick=()=>job('বিভাগ',()=>nav(page));$('all').onclick=()=>job('তালিকা',()=>select(''));$('reload').onclick=()=>job('Refresh',()=>load());$('more').onclick=()=>job('আরও তথ্য',()=>load(true));$('status').onchange=render;$('search').oninput=render;
+     const form=$('entry'),field=k=>form.elements.namedItem(k),val=k=>field(k).value.trim(),on=k=>field(k).checked;
+     function input(k,label,value='',opts={}){const lab=node('label',label,opts.type==='checkbox'?'check':'');const el=document.createElement(opts.map?'select':opts.type==='area'?'textarea':'input');el.name=k;
+     if(opts.map)for(const [a,b] of Object.entries(opts.map))el.add(new Option(b,a));else if(el.tagName==='INPUT')el.type=opts.type||'text';
+     if(opts.type==='checkbox')el.checked=value===true;else el.value=value??'';if(opts.required)el.required=true;if(opts.max)el.maxLength=opts.max;lab.append(el);$('fields').append(lab);return el}
+     function openForm(item=null){if(busy)return;guard();const s=page==='services',d=item?.d||{};
+     if(item&&(s?(d.phones||[]).length:(d.variants||[]).length)){say(s?'একাধিক ফোনের সেবা এই ফর্মে সম্পাদনা করা যায় না।':'Variant-সহ পণ্য এই ফর্মে সম্পাদনা করা যায় না।');return}
+     editing=item;ref=item?F.doc(db,page,item.id):F.doc(F.collection(db,page));dirty=false;visible('formError',false);$('fields').replaceChildren();
+     $('formTitle').textContent=(item?'সম্পাদনা: ':'নতুন ')+(item?d.name:s?'সেবা':'পণ্য');
+     input('name','নাম',d.name,{required:true,max:120});const map=s?services:products;
+     const cat=input('categoryId','বিভাগ',d.categoryId||category||Object.keys(map)[0],{map,required:true});
+     if(s){const sub=input('subtypeId','ধরন','',{map:{}});const refresh=()=>{sub.replaceChildren(new Option('সাধারণ',''));for(const [k,v] of Object.entries(types[cat.value]||{}))sub.add(new Option(v,k))};refresh();sub.value=d.subtypeId||'';cat.onchange=refresh;
+     input('areas','ইউনিয়ন / বাজার (একাধিক হলে কমা)',(d.areas||[]).join(', '),{required:true,max:500});input('address','ঠিকানা',d.address,{max:400});input('subtitle','সংক্ষিপ্ত পরিচিতি',d.subtitle,{max:200});
+     input('phone','ফোন নম্বর',d.phone,{type:'tel',max:30});input('phoneKind','নম্বরের ধরন',d.phoneKind||'business',{map:{business:'ব্যবসায়িক',public:'প্রকাশ্য প্রতিষ্ঠানের',personal:'ব্যক্তিগত'}});
+     input('phoneConsent','নম্বর প্রকাশের অনুমতি / বৈধ উৎস নিশ্চিত করেছি',false,{type:'checkbox'});input('sourceName','তথ্যের উৎস',d.sourceName,{max:200});input('sourceUrl','উৎসের HTTPS লিংক',d.sourceUrl,{type:'url',max:2048});
+     input('openingHours','খোলার সময়',d.openingHours,{max:200});input('isGovernmentInformation','সরকারি তথ্য',d.isGovernmentInformation,{type:'checkbox'});
+     }else{input('unit','একক',d.unit,{required:true,max:60});input('price','দাম (টাকা)',item?d.priceMinor/100:'',{required:true});input('originalPrice','আগের দাম (ঐচ্ছিক)',d.originalPriceMinor?d.originalPriceMinor/100:'');
+     input('stockQty','স্টক (পূর্ণ সংখ্যা)',d.stockQty??'',{required:true});input('featured','নির্বাচিত পণ্য',d.featured,{type:'checkbox'})}
+     input('description','বিস্তারিত',d.description,{type:'area',max:4000});input('imageUrl','ছবির HTTPS লিংক',d.imageUrl,{type:'url',max:2048});input('published','App-এ প্রকাশ করুন',item?d.published:true,{type:'checkbox'});
+     $('editor').showModal();field('name').focus()}
+     function closeForm(){if(!busy&&(!dirty||confirm('সংরক্ষণ না করেই ফিরে যাবেন?')))$('editor').close()}
+     $('close').onclick=closeForm;$('editor').oncancel=e=>{e.preventDefault();closeForm()};form.oninput=form.onchange=()=>{dirty=true};$('add').onclick=()=>openForm();
+     function payload(){const imageUrl=https(val('imageUrl')),categoryId=val('categoryId'),d={name:val('name'),categoryId,imageUrl,description:val('description'),published:on('published')};
+     if(d.name.length<2)throw Error('নাম অন্তত দুই অক্ষরের হতে হবে।');
+     if(page==='services'){const areas=[...new Set(val('areas').split(/[,，]/).map(x=>x.trim()).filter(Boolean))],phone=digits(val('phone')).replace(/[\s()-]/g,''),kind=val('phoneKind'),sourceUrl=https(val('sourceUrl')),sub=val('subtypeId');
+     if(!areas.length)throw Error('অন্তত একটি এলাকা দিন।');if(phone&&(!/^\+?\d{3,15}$/.test(phone)||!on('phoneConsent')))throw Error('নম্বর ও প্রকাশের অনুমতি যাচাই করুন।');if(on('isGovernmentInformation')&&!sourceUrl)throw Error('সরকারি তথ্যের উৎসের লিংক দিন।');
+     return {...d,areas,address:val('address'),subtitle:val('subtitle'),subtypeId:sub,subtypeLabel:types[categoryId]?.[sub]||'',openingHours:val('openingHours'),sourceName:val('sourceName'),sourceUrl,isGovernmentInformation:on('isGovernmentInformation'),phone,phoneKind:kind,phonePublic:!!phone,phoneConsent:!!phone&&on('phoneConsent'),phoneConsentAt:phone&&kind==='personal'?F.serverTimestamp():null,phones:[],verified:false,verificationSource:'',verifiedAt:null}}
+     const p=money(val('price')),old=val('originalPrice')?money(val('originalPrice')):0,n=digits(val('stockQty'));if(!val('unit')||p<1||p>10000000||old>10000000||(old&&old<=p)||!/^\d+$/.test(n)||Number(n)>1000000)throw Error('একক, দাম ও স্টক ঠিক করুন।');
+     if(editing?.d.published&&!d.published)throw Error('প্রকাশিত পণ্য বন্ধ করতে স্টক ০ দিন।');
+     const images=[...new Set([imageUrl,...(editing?.d.images||[]).filter(x=>x!==editing?.d.imageUrl)].filter(Boolean))];
+     return {...d,categoryName:products[categoryId],unit:val('unit'),priceMinor:p,originalPriceMinor:old,stockQty:Number(n),inStock:Number(n)>0,featured:on('featured'),images,variants:[],demoMode:false}}
+     form.onsubmit=e=>{e.preventDefault();job('সংরক্ষণ',async()=>{guard();visible('formError',false);const data=payload(),old=editing,r=ref,g=epoch;
+     await F.runTransaction(db,async tx=>{const snap=await tx.get(r);if(old?(!snap.exists()||stable(snap.data())!==stable(old.d)):snap.exists())throw Error('তথ্য বা স্টক বদলেছে। Refresh করে দেখুন।');
+     tx.set(r,{...data,adminRevision:(snap.data()?.adminRevision||0)+1,updatedAt:F.serverTimestamp(),updatedBy:UID,...(snap.exists()?{}:{createdAt:F.serverTimestamp()})},{merge:true})});
+     if(g!==epoch)return;dirty=false;$('editor').close();say('সংরক্ষণ হয়েছে।',true);try{await load()}catch{say('সংরক্ষণ হয়েছে। তালিকা পেতে Refresh চাপুন।')}})};
+     const storeRef=F.doc(db,'app_config','store'),appRef=F.doc(db,'app_config','app');
+     const storeDefaults={name:'Hello Store',enabled:false,demoMode:false,bannerTitle:'নিত্যদিনের কেনাকাটা, আরও সহজ।',bannerSubtitle:'স্মার্ট ডিমলার নিজস্ব অনলাইন স্টোর',supportPhone:'',policyVersion:'draft-1',returnWindowDays:7,deliveryPolicy:'',returnPolicy:'',deliveryZones:[]};
+     const appDefaults={supportEnabled:true,operatorName:'Habib Islam Raj',operatorAddress:'',supportPhone:'',supportEmail:'technovasoft6866@gmail.com',supportHours:'',policiesPublished:false,policyVersion:'draft-1',policyUpdated:'',privacyUrl:'',privacyText:'',termsUrl:'',termsText:'',deletionUrl:'',deletionText:'',aboutText:'Smart Dimla একটি স্বাধীন বেসরকারি অ্যাপ।',cancellationText:'',areas:['সব এলাকা'],governmentSources:[],developerName:'',developerWebsite:''};
+     async function setupRead(){guard();const g=epoch;$('init').disabled=true;const [s,a]=await Promise.all([F.getDocFromServer(storeRef),F.getDocFromServer(appRef)]);if(g!==epoch)return;
+     const st=s.data()||{},ap=a.data()||{};$('stats').replaceChildren();for(const [key,v] of Object.entries({'Store':s.exists()?'তৈরি হয়েছে':'তৈরি হয়নি','অর্ডার':st.enabled?'চালু':'বন্ধ','নীতিমালা':ap.policiesPublished?'প্রকাশিত':'খসড়া','Support':ap.supportEmail||'দেওয়া হয়নি'}))$('stats').append(node('dt',key),node('dd',v));$('init').disabled=s.exists()&&a.exists()}
+     $('check').onclick=()=>job('Store অবস্থা',setupRead);$('init').onclick=()=>job('Store setup',async()=>{guard();await F.runTransaction(db,async tx=>{const s=await tx.get(storeRef),a=await tx.get(appRef);if(!s.exists())tx.set(storeRef,storeDefaults);if(!a.exists())tx.set(appRef,appDefaults)});await setupRead();say('প্রাথমিক setup সম্পন্ন।',true)});
+     $('verify').onclick=()=>job('পরিচয় যাচাই',async()=>{const u=auth.currentUser;if(!u)throw Error('আবার login করুন।');const c=await u.getIdTokenResult(true);if(auth.currentUser!==u)return;claims=c;guard();last='পরিচয় মিলেছে। এটি Delete permission-এর পরীক্ষা নয়।';diag();say(last,true)});
+     $('signin').onsubmit=e=>{e.preventDefault();job('লগইন',async()=>{await H.signInWithEmailAndPassword(auth,$('email').value.trim(),$('pass').value);$('pass').value=''})};$('logout').onclick=()=>job('লগআউট',()=>H.signOut(auth));
+     H.onAuthStateChanged(auth,async u=>{const g=++session;epoch++;claims=null;last='';rows=[];cursor=null;editing=null;ref=null;$('cards').replaceChildren();if($('editor').open)$('editor').close();visible('workspace',false);visible('login',true);diag();
+     if(!u){$('enter').disabled=false;visible('notice',false);return}
+     try{const result=await u.getIdTokenResult();if(g!==session)return;claims=result;guard();diag();visible('workspace',true);visible('login',false);visible('notice',false);$('who').textContent=u.email||'Admin';await nav('home')}
+     catch(e){if(g!==session)return;await H.signOut(auth);say('প্রবেশ হয়নি: '+e.message)}});
+    }catch(e){say('Firebase চালু হয়নি: '+(e.code||e.message))}
+</script></body></html>

@@ -3,14 +3,14 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/models/public_service_phone.dart';
-import '../../services/community_service.dart';
 import '../../screens/07_service_details/service_details_screen.dart';
 import '../../screens/10_product_details/product_details_screen.dart';
+import '../../services/community_service.dart';
 import '../../services/saved_items_store.dart';
 
 enum DirectoryKind { all, services, products }
@@ -168,7 +168,9 @@ class DirectoryItem {
     final value = directoryDigits(phone)
         .replaceAll(RegExp(r'[\s()\-]'), '');
 
-    return RegExp(r'^\+?\d{3,15}$').hasMatch(value) ? value : null;
+    return RegExp(r'^\+?\d{3,15}$').hasMatch(value)
+        ? value
+        : null;
   }
 
   factory DirectoryItem.fromDoc(
@@ -184,6 +186,7 @@ class DirectoryItem {
 
     List<String> strings(String key) {
       final value = data[key];
+
       if (value is! List) return [];
 
       return value
@@ -197,6 +200,7 @@ class DirectoryItem {
     final price = data['priceMinor'];
     final date = data['verifiedAt'];
     final verificationEnabled = data['verified'] == true;
+    final phones = publicServicePhones(data);
 
     return DirectoryItem(
       id: doc.id,
@@ -210,16 +214,13 @@ class DirectoryItem {
           : text('description'),
       areas: strings('areas'),
       keywords: strings('keywords'),
-
-
-      phone: publicServicePhones(data).isEmpty
-          ? ''
-          : publicServicePhones(data).first.number,
-
+      phone: phones.isEmpty ? '' : phones.first.number,
       imageUrl: text('imageUrl'),
       unit: text('unit'),
       priceMinor: price is int && price >= 0 ? price : null,
-      inStock: data['inStock'] is bool ? data['inStock'] as bool : null,
+      inStock: data['inStock'] is bool
+          ? data['inStock'] as bool
+          : null,
       verifiedAt: verificationEnabled && date is Timestamp
           ? date.toDate()
           : null,
@@ -229,16 +230,20 @@ class DirectoryItem {
   }
 }
 
-/// One catalog cache for the running app session.
-/// Public catalog is read only. Saved service IDs stay on this device.
+/// Public catalog only.
+/// Cached results are not treated as freshly verified server results.
 class DirectoryCatalog extends GetxService {
   static const savedKey = 'hello_dimla_saved_service_ids_v1';
+
+  static const _freshFor = Duration(minutes: 2);
+  static const _requestTimeout = Duration(seconds: 15);
 
   final services = <DirectoryItem>[].obs;
   final products = <DirectoryItem>[].obs;
 
   final servicesLoading = false.obs;
   final productsLoading = false.obs;
+
   final servicesError = ''.obs;
   final productsError = ''.obs;
 
@@ -250,8 +255,8 @@ class DirectoryCatalog extends GetxService {
   RxBool get saving => _saved.saving;
   RxString get savedError => _saved.error;
 
-  bool _servicesReady = false;
-  bool _productsReady = false;
+  DateTime? _servicesUpdated;
+  DateTime? _productsUpdated;
 
   Future<void>? _serviceTask;
   Future<void>? _productTask;
@@ -272,126 +277,301 @@ class DirectoryCatalog extends GetxService {
   Future<void> _firebase() async {
     if (Firebase.apps.isNotEmpty) return;
 
-    _firebaseTask ??= Firebase.initializeApp().then<void>((_) {});
+    final task = _firebaseTask ??=
+        Firebase.initializeApp().then<void>((_) {});
 
     try {
-      await _firebaseTask;
-    } catch (_) {
-      _firebaseTask = null;
-      if (Firebase.apps.isEmpty) rethrow;
+      await task.timeout(_requestTimeout);
+    } finally {
+      if (identical(_firebaseTask, task)) {
+        _firebaseTask = null;
+      }
     }
   }
 
-  Future<List<DirectoryItem>> _read(
-      String collection, {
-        required bool product,
-      }) async {
-    await _firebase();
-
-    final result = <DirectoryItem>[];
-    QueryDocumentSnapshot<Map<String, dynamic>>? cursor;
-
-    while (true) {
-      Query<Map<String, dynamic>> query = FirebaseFirestore.instance
-          .collection(collection)
-          .where('published', isEqualTo: true)
-          .orderBy(FieldPath.documentId)
-          .limit(100);
-
-      if (cursor != null) {
-        query = query.startAfterDocument(cursor);
-      }
-
-      final snapshot = await query
-          .get(const GetOptions(source: Source.server))
-          .timeout(const Duration(seconds: 20));
-
-      for (final doc in snapshot.docs) {
-        final item = DirectoryItem.fromDoc(doc, product: product);
-        if (item.name.isNotEmpty) result.add(item);
-      }
-
-      if (snapshot.docs.length < 100) break;
-      cursor = snapshot.docs.last;
-    }
-
-    return result;
-  }
-
-  String _error(Object error) {
+  String _code(Object error) {
     if (error is TimeoutException) {
-      return 'তালিকা লোড হতে সময় লাগছে। আবার চেষ্টা করুন।';
+      return 'deadline-exceeded';
     }
 
-    if (error is FirebaseException &&
-        error.code == 'permission-denied') {
-      return 'তালিকা পড়ার অনুমতি পাওয়া যায়নি। Support-এ জানান।';
+    final String raw;
+
+    if (error is FirebaseException) {
+      raw = error.code;
+    } else if (error is PlatformException) {
+      raw = error.code;
+    } else if (error is FormatException || error is TypeError) {
+      return 'invalid-data';
+    } else {
+      return error.runtimeType.toString();
     }
 
-    return 'তালিকা লোড হয়নি। আবার চেষ্টা করুন।';
+    return raw
+        .split('/')
+        .last
+        .replaceAll('_', '-')
+        .toLowerCase();
   }
 
-  Future<void> loadServices({bool force = false}) async {
-    if (_serviceTask != null) {
-      await _serviceTask;
+  bool _transient(Object error) {
+    return const {
+      'unavailable',
+      'deadline-exceeded',
+      'network-request-failed',
+    }.contains(_code(error));
+  }
+
+  String _message(Object error) {
+    final code = _code(error);
+
+    final message = switch (code) {
+      'permission-denied' =>
+      'Firebase পড়ার অনুমতি দেয়নি। Rules ও App Check যাচাই প্রয়োজন।',
+      'unauthenticated' =>
+      'Firebase পরিচয় যাচাই করেনি। Authentication configuration যাচাই প্রয়োজন।',
+      'failed-precondition' =>
+      'Firebase query সম্পন্ন হয়নি। Error log-এ index বা configuration-এর কারণ দেখুন।',
+      'unavailable' || 'network-request-failed' =>
+      'Firebase server-এর সঙ্গে সংযোগ হয়নি। অন্য Wi-Fi বা mobile data দিয়ে চেষ্টা করুন।',
+      'deadline-exceeded' =>
+      'Server সময়মতো উত্তর দেয়নি। আবার চেষ্টা করুন।',
+      'resource-exhausted' =>
+      'Firebase quota বা resource সীমা পূর্ণ হয়েছে। Console যাচাই প্রয়োজন।',
+      'not-found' =>
+      'Firebase database/resource পাওয়া যায়নি। Project configuration যাচাই প্রয়োজন।',
+      'invalid-data' =>
+      'তথ্যের format সঠিক নয়। সংশ্লিষ্ট document যাচাই প্রয়োজন।',
+      _ => 'তালিকা লোড হয়নি। নিচের error code support-এ জানান।',
+    };
+
+    final details = error is FirebaseException
+        ? error.message
+        : error is PlatformException
+        ? error.message
+        : null;
+
+    final showDetails = const {
+      'unknown',
+      'internal',
+      'invalid-argument',
+      'channel-error',
+    }.contains(code);
+
+    final clean = (details ?? '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    final extra = showDetails && clean.isNotEmpty
+        ? '\n${clean.length > 240 ? clean.substring(0, 240) : clean}'
+        : '';
+
+    return '$message [Error: $code]$extra';
+  }
+
+  List<DirectoryItem> _parse(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+        required bool product,
+        required void Function() onInvalid,
+      }) {
+    final items = <DirectoryItem>[];
+
+    for (final doc in docs) {
+      try {
+        final item = DirectoryItem.fromDoc(
+          doc,
+          product: product,
+        );
+
+        if (item.name.isEmpty) {
+          onInvalid();
+        } else {
+          items.add(item);
+        }
+      } catch (error, stack) {
+        onInvalid();
+
+        debugPrint('Directory document ${doc.id}: $error');
+        debugPrintStack(stackTrace: stack);
+      }
+    }
+
+    return items;
+  }
+
+  Future<void> loadServices({bool force = false}) {
+    return _load(product: false, force: force);
+  }
+
+  Future<void> loadProducts({bool force = false}) {
+    return _load(product: true, force: force);
+  }
+
+  Future<void> _load({
+    required bool product,
+    required bool force,
+  }) async {
+    if (isClosed) return;
+
+    final running = product ? _productTask : _serviceTask;
+
+    if (running != null) {
+      await running;
       return;
     }
 
-    if (_servicesReady && !force) return;
+    final updated = product
+        ? _productsUpdated
+        : _servicesUpdated;
 
-    final task = _loadServices();
-    _serviceTask = task;
+    if (!force &&
+        updated != null &&
+        DateTime.now().difference(updated) < _freshFor) {
+      return;
+    }
+
+    final task = _loadOnce(product: product);
+
+    if (product) {
+      _productTask = task;
+    } else {
+      _serviceTask = task;
+    }
 
     try {
       await task;
     } finally {
-      _serviceTask = null;
+      if (product) {
+        _productTask = null;
+      } else {
+        _serviceTask = null;
+      }
     }
   }
 
-  Future<void> _loadServices() async {
-    servicesLoading.value = true;
-    servicesError.value = '';
+  Future<void> _loadOnce({
+    required bool product,
+  }) async {
+    final collection = product ? 'products' : 'services';
+
+    final target = product ? products : services;
+    final loading = product
+        ? productsLoading
+        : servicesLoading;
+    final errorText = product
+        ? productsError
+        : servicesError;
+
+    loading.value = true;
+    errorText.value = '';
 
     try {
-      services.assignAll(await _read('services', product: false));
-      _servicesReady = true;
-    } catch (error) {
-      servicesError.value = _error(error);
+      await _firebase();
+
+      if (isClosed) return;
+
+      final base = FirebaseFirestore.instance
+          .collection(collection)
+          .where('published', isEqualTo: true);
+
+      // Cache is optional and may contain only part of the catalog.
+      if (target.isEmpty) {
+        try {
+          final cached = await base
+              .limit(100)
+              .get(const GetOptions(source: Source.cache))
+              .timeout(const Duration(seconds: 2));
+
+          if (isClosed) return;
+
+          final items = _parse(
+            cached.docs,
+            product: product,
+            onInvalid: () {},
+          );
+
+          if (items.isNotEmpty) {
+            target.assignAll(items);
+          }
+        } catch (_) {
+          // Continue with the server request if cache is unavailable.
+        }
+      }
+
+      // Firestore's default ordering is document ID ascending.
+      QueryDocumentSnapshot<Map<String, dynamic>>? cursor;
+
+      final fetched = <DirectoryItem>[];
+      var invalid = 0;
+
+      while (!isClosed) {
+        Query<Map<String, dynamic>> page = base.limit(100);
+
+        if (cursor != null) {
+          page = page.startAfterDocument(cursor);
+        }
+
+        final snapshot = await page
+            .get(const GetOptions(source: Source.server))
+            .timeout(_requestTimeout);
+
+        if (isClosed) return;
+
+        fetched.addAll(
+          _parse(
+            snapshot.docs,
+            product: product,
+            onInvalid: () => invalid++,
+          ),
+        );
+
+        // Display available pages immediately.
+        target.assignAll(fetched);
+
+        if (snapshot.docs.length < 100) break;
+
+        cursor = snapshot.docs.last;
+      }
+
+      if (isClosed) return;
+
+      if (product) {
+        _productsUpdated = DateTime.now();
+      } else {
+        _servicesUpdated = DateTime.now();
+      }
+
+      if (invalid > 0) {
+        errorText.value =
+        '$invalidটি অসম্পূর্ণ তথ্য দেখানো যায়নি। '
+            '[Error: invalid-document]';
+      }
+    } catch (error, stack) {
+      debugPrint('Directory $collection: $error');
+      debugPrintStack(stackTrace: stack);
+
+      if (isClosed) return;
+
+      if (product) {
+        _productsUpdated = null;
+      } else {
+        _servicesUpdated = null;
+      }
+
+      // Keep old results only for temporary connectivity failures.
+      if (!_transient(error)) {
+        target.clear();
+      }
+
+      final cachedNotice = target.isNotEmpty
+          ? '\nআগে পাওয়া বা আংশিক তালিকা দেখানো হচ্ছে; '
+          'বর্তমান তথ্য যাচাই হয়নি।'
+          : '';
+
+      errorText.value = '${_message(error)}$cachedNotice';
     } finally {
-      servicesLoading.value = false;
-    }
-  }
-
-  Future<void> loadProducts({bool force = false}) async {
-    if (_productTask != null) {
-      await _productTask;
-      return;
-    }
-
-    if (_productsReady && !force) return;
-
-    final task = _loadProducts();
-    _productTask = task;
-
-    try {
-      await task;
-    } finally {
-      _productTask = null;
-    }
-  }
-
-  Future<void> _loadProducts() async {
-    productsLoading.value = true;
-    productsError.value = '';
-
-    try {
-      products.assignAll(await _read('products', product: true));
-      _productsReady = true;
-    } catch (error) {
-      productsError.value = _error(error);
-    } finally {
-      productsLoading.value = false;
+      if (!isClosed) {
+        loading.value = false;
+      }
     }
   }
 
@@ -414,8 +594,8 @@ class DirectoryCatalog extends GetxService {
     );
   }
 
-  Future<void> toggleProductSaved(DirectoryItem item) async {
-    await _saved.toggle(
+  Future<void> toggleProductSaved(DirectoryItem item) {
+    return _saved.toggle(
       id: item.id,
       product: true,
       snapshot: reference(item),
@@ -447,8 +627,10 @@ class DirectoryController extends GetxController {
   final category = ''.obs;
   final subtype = ''.obs;
   final area = 'সব এলাকা'.obs;
+
   final kind = DirectoryKind.all.obs;
   final sort = ProductSort.name.obs;
+
   final minimumPrice = Rxn<int>();
   final maximumPrice = Rxn<int>();
   final visibleLimit = 20.obs;
@@ -461,14 +643,27 @@ class DirectoryController extends GetxController {
       ? directoryCategories[fixedCategory] ?? 'স্থানীয় সেবা'
       : 'সেবা ও পণ্য খুঁজুন';
 
-  bool get loading => servicesOnly
-      ? catalog.servicesLoading.value
-      : catalog.servicesLoading.value || catalog.productsLoading.value;
+  bool get loading {
+    final pending = switch (kind.value) {
+      DirectoryKind.services =>
+      catalog.servicesLoading.value,
+      DirectoryKind.products =>
+      catalog.productsLoading.value,
+      DirectoryKind.all =>
+      catalog.servicesLoading.value ||
+          catalog.productsLoading.value,
+    };
+
+    return pending && filtered.isEmpty;
+  }
 
   List<String> get errors => [
-    if (catalog.servicesError.value.isNotEmpty)
+    if (kind.value != DirectoryKind.products &&
+        catalog.servicesError.value.isNotEmpty)
       'সেবা: ${catalog.servicesError.value}',
-    if (!servicesOnly && catalog.productsError.value.isNotEmpty)
+    if (!servicesOnly &&
+        kind.value != DirectoryKind.services &&
+        catalog.productsError.value.isNotEmpty)
       'পণ্য: ${catalog.productsError.value}',
     if (catalog.savedError.value.isNotEmpty)
       catalog.savedError.value,
@@ -478,14 +673,18 @@ class DirectoryController extends GetxController {
     final values = <String>{'সব এলাকা', area.value};
 
     if (Get.isRegistered<CommunityService>()) {
-      values.addAll(Get.find<CommunityService>().availableAreas);
+      values.addAll(
+        Get.find<CommunityService>().availableAreas,
+      );
     }
 
     for (final item in catalog.services) {
       values.addAll(item.areas);
     }
 
-    return values.where((value) => value.trim().isNotEmpty).toList();
+    return values
+        .where((value) => value.trim().isNotEmpty)
+        .toList();
   }
 
   Map<String, String> get subtypes {
@@ -494,8 +693,12 @@ class DirectoryController extends GetxController {
     };
 
     for (final item in catalog.services) {
-      if (item.categoryId == category.value && item.subtypeId.isNotEmpty) {
-        result.putIfAbsent(item.subtypeId, () => item.typeTitle);
+      if (item.categoryId == category.value &&
+          item.subtypeId.isNotEmpty) {
+        result.putIfAbsent(
+          item.subtypeId,
+              () => item.typeTitle,
+        );
       }
     }
 
@@ -509,7 +712,9 @@ class DirectoryController extends GetxController {
         .toList();
 
     bool matches(DirectoryItem item) {
-      if (!words.every(item.searchable.contains)) return false;
+      if (!words.every(item.searchable.contains)) {
+        return false;
+      }
 
       if (!item.product) {
         if (category.value.isNotEmpty &&
@@ -535,7 +740,10 @@ class DirectoryController extends GetxController {
         final min = minimumPrice.value;
         final max = maximumPrice.value;
 
-        if ((min != null || max != null) && price == null) return false;
+        if ((min != null || max != null) && price == null) {
+          return false;
+        }
+
         if (min != null && price! < min) return false;
         if (max != null && price! > max) return false;
       }
@@ -544,23 +752,32 @@ class DirectoryController extends GetxController {
     }
 
     int byName(DirectoryItem a, DirectoryItem b) {
-      final comparison =
-      directoryNormalize(a.name).compareTo(directoryNormalize(b.name));
+      final comparison = directoryNormalize(a.name)
+          .compareTo(directoryNormalize(b.name));
 
-      return comparison != 0 ? comparison : a.id.compareTo(b.id);
+      return comparison != 0
+          ? comparison
+          : a.id.compareTo(b.id);
     }
 
-    final serviceResults = catalog.services.where(matches).toList()
+    final serviceResults =
+    catalog.services.where(matches).toList()
       ..sort(byName);
 
-    final productResults = catalog.products.where(matches).toList()
+    final productResults =
+    catalog.products.where(matches).toList()
       ..sort((a, b) {
-        if (sort.value == ProductSort.name) return byName(a, b);
+        if (sort.value == ProductSort.name) {
+          return byName(a, b);
+        }
 
         final first = a.priceMinor;
         final second = b.priceMinor;
 
-        if (first == null && second == null) return byName(a, b);
+        if (first == null && second == null) {
+          return byName(a, b);
+        }
+
         if (first == null) return 1;
         if (second == null) return -1;
 
@@ -568,13 +785,18 @@ class DirectoryController extends GetxController {
             ? first.compareTo(second)
             : second.compareTo(first);
 
-        return comparison != 0 ? comparison : byName(a, b);
+        return comparison != 0
+            ? comparison
+            : byName(a, b);
       });
 
     return switch (kind.value) {
       DirectoryKind.services => serviceResults,
       DirectoryKind.products => productResults,
-      DirectoryKind.all => [...serviceResults, ...productResults],
+      DirectoryKind.all => [
+        ...serviceResults,
+        ...productResults,
+      ],
     };
   }
 
@@ -584,10 +806,14 @@ class DirectoryController extends GetxController {
 
     catalog = Get.isRegistered<DirectoryCatalog>()
         ? Get.find<DirectoryCatalog>()
-        : Get.put(DirectoryCatalog(), permanent: true);
+        : Get.put(
+      DirectoryCatalog(),
+      permanent: true,
+    );
 
     if (Get.isRegistered<CommunityService>()) {
-      area.value = Get.find<CommunityService>().selectedArea.value;
+      area.value =
+          Get.find<CommunityService>().selectedArea.value;
     }
 
     unawaited(reload());
@@ -596,26 +822,35 @@ class DirectoryController extends GetxController {
   Future<void> reload({bool force = false}) async {
     await Future.wait<void>([
       catalog.loadServices(force: force),
-      if (!servicesOnly) catalog.loadProducts(force: force),
+      if (!servicesOnly)
+        catalog.loadProducts(force: force),
       catalog.loadSaved(),
     ]);
   }
 
   void search(String value) {
     _searchTimer?.cancel();
-    _searchTimer = Timer(const Duration(milliseconds: 220), () {
-      query.value = value;
-      visibleLimit.value = 20;
-    });
+
+    _searchTimer = Timer(
+      const Duration(milliseconds: 220),
+          () {
+        if (isClosed) return;
+
+        query.value = value;
+        visibleLimit.value = 20;
+      },
+    );
   }
 
   void reset() {
     _searchTimer?.cancel();
     searchInput.clear();
+
     query.value = '';
     category.value = fixedCategory ?? '';
     subtype.value = '';
     area.value = 'সব এলাকা';
+
     minimumPrice.value = null;
     maximumPrice.value = null;
     sort.value = ProductSort.name;
@@ -643,7 +878,11 @@ class DirectoryController extends GetxController {
     visibleLimit.value = 20;
   }
 
-  void applyPrice(int? min, int? max, ProductSort value) {
+  void applyPrice(
+      int? min,
+      int? max,
+      ProductSort value,
+      ) {
     minimumPrice.value = min;
     maximumPrice.value = max;
     sort.value = value;
@@ -654,14 +893,19 @@ class DirectoryController extends GetxController {
     FocusManager.instance.primaryFocus?.unfocus();
 
     if (item.product) {
-      Get.to(() => ProductDetailsScreen(productId: item.id));
+      Get.to(
+            () => ProductDetailsScreen(productId: item.id),
+      );
     } else {
-      Get.to(() => ServiceDetailsScreen(serviceId: item.id));
+      Get.to(
+            () => ServiceDetailsScreen(serviceId: item.id),
+      );
     }
   }
 
   Future<void> call(DirectoryItem item) async {
     final number = item.dialNumber;
+
     if (number == null) return;
 
     try {
@@ -670,7 +914,9 @@ class DirectoryController extends GetxController {
         mode: LaunchMode.externalApplication,
       );
 
-      if (!opened) throw StateError('Dialer unavailable');
+      if (!opened) {
+        throw StateError('Dialer unavailable');
+      }
     } catch (_) {
       Get.snackbar(
         'Dialer খোলা যায়নি',

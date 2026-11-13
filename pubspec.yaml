@@ -1,5 +1,5 @@
 name: hellodimla
-description: "Hello Dimla smart applications"
+description: "Smart Dimla local services, shopping and business ledger"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -36,9 +36,17 @@ dev_dependencies:
     sdk: flutter
 
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
 
   assets:
     - assets/images/home_reference.png
+    - assets/images/app_logo.png
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/app_logo.png"
+  min_sdk_android: 24

@@ -10,7 +10,7 @@ class HelloDimlaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GetMaterialApp(
-      title: 'Hello Dimla',
+      title: 'Smart Dimla',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       defaultTransition: Transition.fadeIn,

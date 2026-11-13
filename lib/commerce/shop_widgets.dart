@@ -10,11 +10,6 @@ const shopInk = Color(0xFF152543);
 const shopBackground = Color(0xFFF4F7FF);
 
 class ShopPage extends StatelessWidget {
-  final String title;
-  final Widget body;
-  final List<Widget> actions;
-  final Widget? bottom;
-
   const ShopPage({
     super.key,
     required this.title,
@@ -23,16 +18,25 @@ class ShopPage extends StatelessWidget {
     this.bottom,
   });
 
+  final String title;
+  final Widget body;
+  final List<Widget> actions;
+  final Widget? bottom;
+
   @override
   Widget build(BuildContext context) {
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(18),
-      borderSide: const BorderSide(color: Color(0xFFDCE5F5)),
+      borderSide: const BorderSide(
+        color: Color(0xFFDCE5F5),
+      ),
     );
 
     return Theme(
       data: Theme.of(context).copyWith(
-        colorScheme: ColorScheme.fromSeed(seedColor: shopBlue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: shopBlue,
+        ),
         scaffoldBackgroundColor: shopBackground,
         appBarTheme: const AppBarTheme(
           backgroundColor: shopBackground,
@@ -64,14 +68,19 @@ class ShopPage extends StatelessWidget {
         appBar: AppBar(
           title: Text(
             title,
-            style: const TextStyle(fontWeight: FontWeight.w800),
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+            ),
           ),
           actions: actions,
         ),
         body: SafeArea(
           child: Align(
             alignment: Alignment.topCenter,
-            child: SizedBox(width: 980, child: body),
+            child: SizedBox(
+              width: 980,
+              child: body,
+            ),
           ),
         ),
         bottomNavigationBar: bottom == null
@@ -83,7 +92,9 @@ class ShopPage extends StatelessWidget {
             decoration: const BoxDecoration(
               color: Colors.white,
               border: Border(
-                top: BorderSide(color: Color(0xFFE3EAF8)),
+                top: BorderSide(
+                  color: Color(0xFFE3EAF8),
+                ),
               ),
             ),
             child: bottom,
@@ -95,14 +106,14 @@ class ShopPage extends StatelessWidget {
 }
 
 class ShopBox extends StatelessWidget {
-  final Widget child;
-  final EdgeInsets padding;
-
   const ShopBox({
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(18),
   });
+
+  final Widget child;
+  final EdgeInsets padding;
 
   @override
   Widget build(BuildContext context) {
@@ -111,7 +122,9 @@ class ShopBox extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE4EBF7)),
+        border: Border.all(
+          color: const Color(0xFFE4EBF7),
+        ),
       ),
       child: child,
     );
@@ -119,16 +132,16 @@ class ShopBox extends StatelessWidget {
 }
 
 class ShopImage extends StatelessWidget {
-  final String url;
-  final double? width;
-  final double? height;
-
   const ShopImage(
       this.url, {
         super.key,
         this.width,
         this.height,
       });
+
+  final String url;
+  final double? width;
+  final double? height;
 
   @override
   Widget build(BuildContext context) {
@@ -164,15 +177,19 @@ class ShopImage extends StatelessWidget {
 }
 
 class ShopEmpty extends StatelessWidget {
+  const ShopEmpty(
+      this.text, {
+        super.key,
+        this.retry,
+      });
+
   final String text;
   final VoidCallback? retry;
-
-  const ShopEmpty(this.text, {super.key, this.retry});
 
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -183,7 +200,10 @@ class ShopEmpty extends StatelessWidget {
               color: shopBlue,
             ),
             const SizedBox(height: 16),
-            Text(text, textAlign: TextAlign.center),
+            Text(
+              text,
+              textAlign: TextAlign.center,
+            ),
             if (retry != null)
               Padding(
                 padding: const EdgeInsets.only(top: 16),
@@ -200,16 +220,16 @@ class ShopEmpty extends StatelessWidget {
 }
 
 class QuantityControl extends StatelessWidget {
-  final int value;
-  final int max;
-  final ValueChanged<int>? onChanged;
-
   const QuantityControl({
     super.key,
     required this.value,
     required this.max,
     this.onChanged,
   });
+
+  final int value;
+  final int max;
+  final ValueChanged<int>? onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -221,7 +241,9 @@ class QuantityControl extends StatelessWidget {
           onPressed: value > 1 && onChanged != null
               ? () => onChanged!(value - 1)
               : null,
-          icon: const Icon(Icons.remove_circle_outline),
+          icon: const Icon(
+            Icons.remove_circle_outline,
+          ),
         ),
         Text(
           '$value',
@@ -235,7 +257,9 @@ class QuantityControl extends StatelessWidget {
           onPressed: value < max && onChanged != null
               ? () => onChanged!(value + 1)
               : null,
-          icon: const Icon(Icons.add_circle_outline),
+          icon: const Icon(
+            Icons.add_circle_outline,
+          ),
         ),
       ],
     );
@@ -243,10 +267,14 @@ class QuantityControl extends StatelessWidget {
 }
 
 class PriceText extends StatelessWidget {
+  const PriceText(
+      this.price, {
+        super.key,
+        this.original = 0,
+      });
+
   final int price;
   final int original;
-
-  const PriceText(this.price, {super.key, this.original = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -275,18 +303,27 @@ class PriceText extends StatelessWidget {
   }
 }
 
-Widget totalRow(String label, int amount, {bool bold = false}) {
+Widget totalRow(
+    String label,
+    int amount, {
+      bool bold = false,
+    }) {
   return Padding(
     padding: const EdgeInsets.symmetric(vertical: 6),
     child: Row(
       children: [
         Expanded(child: Text(label)),
-        Text(
-          money(amount),
-          style: TextStyle(
-            fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
-            fontSize: bold ? 20 : 15,
-            color: bold ? shopBlue : shopInk,
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            money(amount),
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              fontWeight:
+              bold ? FontWeight.w900 : FontWeight.w600,
+              fontSize: bold ? 20 : 15,
+              color: bold ? shopBlue : shopInk,
+            ),
           ),
         ),
       ],
@@ -301,6 +338,7 @@ Future<bool> confirm(
     }) async {
   return await Get.dialog<bool>(
     AlertDialog(
+      scrollable: true,
       title: Text(title),
       content: Text(message),
       actions: [
@@ -320,41 +358,60 @@ Future<bool> confirm(
 
 Future<T?> shopSheet<T>(Widget child) {
   return Get.bottomSheet<T>(
-    Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(28),
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(
-            22,
-            12,
-            22,
-            22 + MediaQuery.viewInsetsOf(Get.context!).bottom,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.blueGrey.shade200,
-                  borderRadius: BorderRadius.circular(8),
+    Builder(
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight:
+                MediaQuery.sizeOf(context).height * .9,
+              ),
+              child: Material(
+                color: Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(28),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    22,
+                    12,
+                    22,
+                    24,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment:
+                    CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.blueGrey.shade200,
+                            borderRadius:
+                            BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      child,
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 20),
-              child,
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     ),
     isScrollControlled: true,
+    backgroundColor: Colors.transparent,
   );
 }
 
@@ -373,17 +430,27 @@ Future<void> policies(StoreConfig? config) async {
         const SizedBox(height: 16),
         const Text(
           'Delivery',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
         ),
-        Text(config?.deliveryPolicy ?? 'তথ্য পাওয়া যায়নি।'),
+        Text(
+          config?.deliveryPolicy ?? 'তথ্য পাওয়া যায়নি।',
+        ),
         const SizedBox(height: 18),
         const Text(
           'Return',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
         ),
-        Text(config?.returnPolicy ?? 'তথ্য পাওয়া যায়নি।'),
+        Text(
+          config?.returnPolicy ?? 'তথ্য পাওয়া যায়নি।',
+        ),
         const SizedBox(height: 14),
-        const Text('অনুরোধ জমা হওয়া মানেই refund অনুমোদিত নয়।'),
+        const Text(
+          'অনুরোধ জমা হওয়া মানেই refund অনুমোদিত নয়।',
+        ),
       ],
     ),
   );
@@ -400,7 +467,9 @@ void shopError(Object error) {
   );
 }
 
-Future<void> guarded(Future<void> Function() action) async {
+Future<void> guarded(
+    Future<void> Function() action,
+    ) async {
   try {
     await action();
   } catch (e) {
@@ -410,7 +479,10 @@ Future<void> guarded(Future<void> Function() action) async {
 
 Future<void> dialStore(String value) {
   return guarded(() async {
-    final phone = value.replaceAll(RegExp(r'[^0-9+]'), '');
+    final phone = value.replaceAll(
+      RegExp(r'[^0-9+]'),
+      '',
+    );
 
     if (!RegExp(r'^\+?\d{6,15}$').hasMatch(phone)) {
       throw StateError('Store-এর ফোন নম্বর দেওয়া হয়নি।');

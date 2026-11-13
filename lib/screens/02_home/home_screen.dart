@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../data/models/community_models.dart';
 import '../05_search_results/search_results_screen.dart';
-import '../06_service_list/service_list_screen.dart';
+import '../04_menu/menu_screen.dart';
 import 'home_controller.dart';
 
 // --- Modern Color Palette ---
@@ -62,7 +62,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _store() => (widget.onOpenStore ?? c.openStore)();
 
   void _allServices() {
-    Get.to(() => const ServiceListScreen());
+    if (widget.onOpenMenu != null) { widget.onOpenMenu!(); return; }
+    Get.to(() => const MenuScreen());
   }
 
   void _menu() => (widget.onOpenMenu ?? _allServices)();
@@ -151,7 +152,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
                       padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
-                      itemCount: 9,
+                      itemCount: 8,
                       itemBuilder: (context, index) {
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 18),
@@ -159,11 +160,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             0 => _header(),
                             1 => _searchBox(),
                             2 => _hero(),
-                            3 => _emergency(),
-                            4 => _shortcuts(),
-                            5 => _services(),
-                            6 => _shopping(),
-                            7 => _updates(),
+                            3 => DirectoryHomeLinks(onAll: _menu, legacy: (_) => Column(children: [_emergency(), const SizedBox(height: 18), _shortcuts()])),
+                            4 => _services(),
+                            5 => _shopping(),
+                            6 => _updates(),
                             _ => _saved(),
                           },
                         );

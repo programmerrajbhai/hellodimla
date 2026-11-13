@@ -5,28 +5,36 @@ import '../../services/community_service.dart';
 import '../02_home/sheets/home_sheets.dart';
 import '../14_order_details/order_details_screen.dart';
 
-enum InboxFilter { all, orders, updates }
+enum InboxFilter {
+  all,
+  orders,
+  updates,
+}
 
 class NotificationsController extends GetxController {
-  final community = Get.find<CommunityService>();
 
+  final community = Get.find<CommunityService>();
   final selectedFilter = InboxFilter.all.obs;
   final opening = false.obs;
-
   List<InboxNotice> get filteredNotices {
     final source = community.visibleNotices;
 
     return switch (selectedFilter.value) {
       InboxFilter.all => source,
-      InboxFilter.orders =>
-          source.where((item) => item.kind == NoticeKind.order).toList(),
-      InboxFilter.updates =>
-          source.where((item) => item.kind == NoticeKind.update).toList(),
+      InboxFilter.orders => source
+          .where((item) => item.kind == NoticeKind.order)
+          .toList(),
+      InboxFilter.updates => source
+          .where((item) => item.kind == NoticeKind.update)
+          .toList(),
     };
   }
-
   Future<void> openNotice(InboxNotice notice) async {
-    if (opening.value || community.saving.value) return;
+    if (isClosed ||
+        opening.value ||
+        community.saving.value) {
+      return;
+    }
 
     opening.value = true;
 
@@ -42,16 +50,23 @@ class NotificationsController extends GetxController {
 
       if (notice.kind == NoticeKind.order) {
         final saved = await community.markRead(notice.id);
-        if (!saved) return;
 
-        Get.to(
-              () => OrderDetailsScreen(orderId: notice.targetId),
+        if (isClosed || !saved) return;
+
+        await Get.to<void>(
+              () => OrderDetailsScreen(
+            orderId: notice.targetId,
+          ),
         );
 
         return;
       }
 
-      final update = await community.loadUpdate(notice.targetId);
+      final update = await community.loadUpdate(
+        notice.targetId,
+      );
+
+      if (isClosed) return;
 
       if (update == null) {
         Get.snackbar(
@@ -63,21 +78,28 @@ class NotificationsController extends GetxController {
       }
 
       final saved = await community.markRead(notice.id);
-      if (!saved) return;
+
+      if (isClosed || !saved) return;
 
       showUpdateSheet(update);
     } catch (_) {
+      if (isClosed) return;
+
       Get.snackbar(
         'বিস্তারিত আনা যায়নি',
         'সংযোগ পরীক্ষা করে আবার চেষ্টা করুন।',
         snackPosition: SnackPosition.BOTTOM,
       );
     } finally {
-      opening.value = false;
+      if (!isClosed) {
+        opening.value = false;
+      }
     }
   }
+  Future<void> refresh() async {
+    if (isClosed) return;
 
-  Future<void> refresh() {
-    return community.start();
+    await community.start();
   }
+
 }
