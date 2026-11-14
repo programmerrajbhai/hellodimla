@@ -1,174 +1,203 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../core/network/service_api.dart';
 import '../../data/models/community_models.dart';
-import '../05_search_results/search_results_screen.dart';
 import '../04_menu/menu_screen.dart';
 import 'home_controller.dart';
 
-// --- Modern Color Palette ---
-const _blue = Color(0xFF1959E8);
-const _blueDark = Color(0xFF0D3B9E);
-const _teal = Color(0xFF0891B2);
-const _ink = Color(0xFF0F1E36);
-const _muted = Color(0xFF64748B);
-const _bg = Color(0xFFF4F7FB);
-const _border = Color(0xFFE2E8F0);
+const _blue = Color(0xff1959e8);
+const _ink = Color(0xff0f1e36);
+const _muted = Color(0xff64748b);
+const _bg = Color(0xfff4f7fb);
+const _border = Color(0xffe2e8f0);
+const _tile = Color(0xfff8fafc);
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({
-    super.key,
-    this.onOpenStore,
-    this.onOpenMenu,
-  });
+  const HomeScreen({super.key, this.onOpenStore, this.onOpenMenu});
 
   final VoidCallback? onOpenStore;
   final VoidCallback? onOpenMenu;
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => _HomeState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeState extends State<HomeScreen> {
   late final HomeController c;
-  late final bool _ownsController;
-
-  bool _refreshing = false;
+  late final bool owns;
+  Timer? timer;
 
   @override
   void initState() {
     super.initState();
+    owns = !Get.isRegistered<HomeController>();
+    c = owns ? Get.put(HomeController()) : Get.find<HomeController>();
 
-    _ownsController = !Get.isRegistered<HomeController>();
+    timer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted ||
+          !TickerMode.of(context) ||
+          ModalRoute.of(context)?.isCurrent == false ||
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        return;
+      }
 
-    c = _ownsController
-        ? Get.put(HomeController())
-        : Get.find<HomeController>();
+      if (!c.quick.loading.value &&
+          !c.services.loading.value &&
+          !c.products.loading.value &&
+          !c.news.loading.value) {
+        unawaited(c.refresh());
+      }
+    });
   }
 
   @override
   void dispose() {
-    if (_ownsController &&
+    timer?.cancel();
+    if (owns &&
         Get.isRegistered<HomeController>() &&
-        identical(Get.find<HomeController>(), c)) {
+        identical(c, Get.find<HomeController>())) {
       Get.delete<HomeController>();
     }
-
     super.dispose();
   }
 
-  void _store() => (widget.onOpenStore ?? c.openStore)();
-
-  void _allServices() {
-    if (widget.onOpenMenu != null) { widget.onOpenMenu!(); return; }
-    Get.to(() => const MenuScreen());
+  void menu() {
+    if (widget.onOpenMenu != null) {
+      widget.onOpenMenu!();
+    } else {
+      Get.to(() => const MenuScreen());
+    }
   }
 
-  void _menu() => (widget.onOpenMenu ?? _allServices)();
+  void store() => (widget.onOpenStore ?? c.openStore)();
 
-  void _find(String query) {
-    Get.to(() => SearchResultsScreen(query: query));
-  }
-
-  void _search() {
+  void search() {
     FocusScope.of(context).unfocus();
     c.search();
   }
 
-  Future<void> _refresh() async {
-    if (_refreshing) return;
+  BorderRadius radius(double n) => BorderRadius.circular(n);
 
-    _refreshing = true;
+  Widget label(
+      String s, {
+        double size = 14,
+        Color color = _ink,
+        FontWeight weight = FontWeight.w400,
+        int? lines,
+      }) => Text(
+    s,
+    maxLines: lines,
+    overflow: lines == null ? null : TextOverflow.ellipsis,
+    style: GoogleFonts.hindSiliguri(
+      fontSize: size,
+      height: 1.38,
+      color: color,
+      fontWeight: weight,
+    ),
+  );
 
-    try {
-      await c.refresh();
-    } finally {
-      _refreshing = false;
-    }
-  }
+  Widget surface(Widget child, {Color color = Colors.white, double r = 22}) =>
+      Material(
+        color: color,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius(r),
+          side: const BorderSide(color: _border),
+        ),
+        child: child,
+      );
+
+  Widget iconTile(IconData icon, Color color) => Container(
+    width: 48,
+    height: 48,
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: .1),
+      borderRadius: radius(14),
+    ),
+    child: Icon(icon, color: color),
+  );
+
+  Widget action(IconData icon, String tip, VoidCallback fn, {int count = 0}) =>
+      Material(
+        color: Colors.white,
+        shape: const CircleBorder(side: BorderSide(color: _border)),
+        child: IconButton(
+          tooltip: tip,
+          onPressed: fn,
+          icon: Badge(
+            isLabelVisible: count > 0,
+            label: Text(count > 99 ? '99+' : '$count'),
+            child: Icon(icon, color: _ink),
+          ),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
+    final list = ListView.builder(
+      key: const PageStorageKey('hello_dimla_home_v2'),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      itemCount: 8,
+      itemBuilder: (_, i) => Padding(
+        padding: const EdgeInsets.only(bottom: 18),
+        child: switch (i) {
+          0 => header(),
+          1 => searchBox(),
+          2 => hero(),
+          3 => quick(),
+          4 => services(),
+          5 => shopping(),
+          6 => news(),
+          _ => saved(),
+        },
+      ),
+    );
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.dark.copyWith(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
       ),
       child: Scaffold(
         backgroundColor: _bg,
         body: Stack(
           children: [
-            // Top Ambient Background Glow
-            Positioned(
-              top: -100,
-              right: -80,
-              child: Container(
-                width: 280,
-                height: 280,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      _blue.withValues(alpha: 0.12),
-                      _blue.withValues(alpha: 0.0),
-                    ],
+            for (final glow in [
+              (Alignment.topRight, _blue),
+              (Alignment.topLeft, const Color(0xff0891b2)),
+            ])
+              Align(
+                alignment: glow.$1,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 240,
+                    height: 240,
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(colors: [
+                        glow.$2.withValues(alpha: .09),
+                        glow.$2.withValues(alpha: 0),
+                      ]),
+                    ),
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              top: 60,
-              left: -100,
-              child: Container(
-                width: 240,
-                height: 240,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      _teal.withValues(alpha: 0.08),
-                      _teal.withValues(alpha: 0.0),
-                    ],
-                  ),
-                ),
-              ),
-            ),
             SafeArea(
               bottom: false,
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 640),
                   child: RefreshIndicator(
+                    onRefresh: c.refresh,
                     color: _blue,
-                    backgroundColor: Colors.white,
-                    onRefresh: _refresh,
-                    child: ListView.builder(
-                      key: const PageStorageKey('hello_dimla_home_v2'),
-                      physics: const AlwaysScrollableScrollPhysics(
-                        parent: BouncingScrollPhysics(),
-                      ),
-                      keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
-                      padding: const EdgeInsets.fromLTRB(18, 12, 18, 36),
-                      itemCount: 8,
-                      itemBuilder: (context, index) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 18),
-                          child: switch (index) {
-                            0 => _header(),
-                            1 => _searchBox(),
-                            2 => _hero(),
-                            3 => DirectoryHomeLinks(onAll: _menu, legacy: (_) => Column(children: [_emergency(), const SizedBox(height: 18), _shortcuts()])),
-                            4 => _services(),
-                            5 => _shopping(),
-                            6 => _updates(),
-                            _ => _saved(),
-                          },
-                        );
-                      },
-                    ),
+                    child: list,
                   ),
                 ),
               ),
@@ -179,1489 +208,538 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- 0. Header Section ---
-  Widget _header() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            // Location Selector Pill
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Material(
-                  color: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                    side: const BorderSide(color: _border),
-                  ),
-                  elevation: 0,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(30),
-                    onTap: c.selectArea,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      child: Obx(
-                            () => Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(5),
-                              decoration: BoxDecoration(
-                                color: _blue.withValues(alpha: 0.1),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.location_on_rounded,
-                                color: _blue,
-                                size: 16,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: _Label(
-                                c.community.selectedArea.value,
-                                weight: FontWeight.w700,
-                                size: 13.5,
-                                maxLines: 1,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              size: 18,
-                              color: _muted,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            // Saved Bookmark Quick Button
-            _CircleActionBtn(
-              icon: Icons.bookmark_border_rounded,
-              tooltip: 'সেভ করা',
-              onTap: c.openSaved,
-            ),
-            const SizedBox(width: 8),
-            // Notification Button
-            Obx(
-                  () => _CircleActionBtn(
-                icon: Icons.notifications_none_rounded,
-                tooltip: 'নোটিফিকেশন',
-                badgeCount: c.community.unreadCount,
-                onTap: c.openNotifications,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _blue.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-
-                      ),
-                    ],
-                  ),
-
-                  Row(
-                    children: [
-                      Text(
-                        'Hello ',
-                        style: GoogleFonts.poppins(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: _ink,
-                          letterSpacing: -0.8,
-                          height: 1.15,
-                        ),
-                      ),
-                      Text(
-                        'Dimla',
-                        style: GoogleFonts.poppins(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          color: _blue,
-                          letterSpacing: -0.8,
-                          height: 1.15,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  const _Label(
-                    'আপনার শহর, আপনার পাশে\n সেবা, কেনাকাটা আর দৈনন্দিন প্রয়োজন এক অ্যাপেই।',
-                    color: _muted,
-                    size: 13.5,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  // --- 1. Search Box Section ---
-  Widget _searchBox() {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: _blue.withValues(alpha: 0.07),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: TextField(
-        controller: c.searchInput,
-        textInputAction: TextInputAction.search,
-        onSubmitted: (_) => _search(),
-        style: GoogleFonts.hindSiliguri(
-          color: _ink,
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
-        ),
-        decoration: InputDecoration(
-          hintText: 'ডাক্তার, অ্যাম্বুলেন্স, দোকান বা পণ্য খুঁজুন...',
-          hintStyle: GoogleFonts.hindSiliguri(
-            color: _muted,
-            fontSize: 14,
-            fontWeight: FontWeight.w400,
-          ),
-          filled: true,
-          fillColor: Colors.white,
-          prefixIcon: const Padding(
-            padding: EdgeInsets.only(left: 14, right: 8),
-            child: Icon(
-              Icons.search_rounded,
-              color: _blue,
-              size: 24,
-            ),
-          ),
-          suffixIcon: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Material(
-              color: _blue,
-              borderRadius: BorderRadius.circular(14),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: _search,
-                child: const SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: Icon(
-                    Icons.arrow_forward_rounded,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          contentPadding: const EdgeInsets.symmetric(
-            vertical: 16,
-            horizontal: 16,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
-            borderSide: const BorderSide(color: _border),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
-            borderSide: const BorderSide(color: _border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
-            borderSide: const BorderSide(
-              color: _blue,
-              width: 1.6,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- 2. Hero Banner Section ---
-  Widget _hero() {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MediaQuery.of(context).disableAnimations
-          ? Duration.zero
-          : const Duration(milliseconds: 400),
-      curve: Curves.easeOutCubic,
-      builder: (_, value, child) {
-        return Opacity(
-          opacity: value,
-          child: Transform.translate(
-            offset: Offset(0, (1 - value) * 10),
-            child: child,
-          ),
-        );
-      },
-      child: Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(26),
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0F2D6B),
-              Color(0xFF1959E8),
-              Color(0xFF088395),
-            ],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: _blueDark.withValues(alpha: 0.25),
-              blurRadius: 22,
-              offset: const Offset(0, 10),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Decorative Glass Circles
-            Positioned(
-              right: -35,
-              top: -35,
-              child: Container(
-                width: 150,
-                height: 150,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.08),
-                ),
-              ),
-            ),
-            Positioned(
-              right: 30,
-              bottom: -50,
-              child: Container(
-                width: 130,
-                height: 130,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.06),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(22),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
-                          ),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.auto_awesome_rounded,
-                              color: Color(0xFFFFD166),
-                              size: 14,
-                            ),
-                            SizedBox(width: 6),
-                            _Label(
-                              'আমাদের ডিমলা · ডিজিটাল সেবা',
-                              color: Colors.white,
-                              size: 12,
-                              weight: FontWeight.w600,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Icon(
-                          Icons.location_city_rounded,
-                          color: Colors.white,
-                          size: 28,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  const _Label(
-                    'প্রয়োজনের সবকিছু,\nএখন এক জায়গায়।',
-                    size: 26,
-                    weight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                  const SizedBox(height: 6),
-                  const _Label(
-                    'আপনার এলাকার জরুরি সেবা, দোকানপাট ও যোগাযোগ খুঁজে নিন মুহূর্তেই।',
-                    color: Color(0xFFDCEBFF),
-                    size: 13.5,
-                  ),
-                  const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      FilledButton.icon(
-                        onPressed: _allServices,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.white,
-                          foregroundColor: _blueDark,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 12,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        icon: const Icon(
-                          Icons.explore_rounded,
-                          size: 19,
-                        ),
-                        label: const _Label(
-                          'সব সেবা দেখুন',
-                          color: _blueDark,
-                          weight: FontWeight.w700,
-                          size: 13.5,
-                        ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: _store,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(
-                            color: Colors.white.withValues(alpha: 0.45),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        icon: const Icon(
-                          Icons.shopping_bag_outlined,
-                          size: 18,
-                        ),
-                        label: const _Label(
-                          'হ্যালো স্টোর',
-                          color: Colors.white,
-                          weight: FontWeight.w600,
-                          size: 13.5,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // --- 3. Emergency SOS Banner ---
-  Widget _emergency() {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFFFF0F2),
-            Color(0xFFFFE4E8),
-          ],
-        ),
-        border: Border.all(
-          color: const Color(0xFFFFCCD5),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFFE11D48).withValues(alpha: 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(22),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(22),
-          onTap: () => c.openCategory('emergency'),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 14,
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 50,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE11D48),
-                    borderRadius: BorderRadius.circular(15),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFE11D48).withValues(alpha: 0.3),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.emergency_rounded,
-                    color: Colors.white,
-                    size: 26,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _Label(
-                        'জরুরি সাহায্য (SOS)',
-                        size: 17,
-                        weight: FontWeight.w700,
-                        color: Color(0xFF9F1239),
-                      ),
-                      SizedBox(height: 2),
-                      _Label(
-                        'অ্যাম্বুলেন্স, ফায়ার সার্ভিস ও হাসপাতাল',
-                        size: 12.5,
-                        color: Color(0xFFBE123C),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _Label(
-                        'দেখুন',
-                        size: 12,
-                        weight: FontWeight.w700,
-                        color: Color(0xFFE11D48),
-                      ),
-                      SizedBox(width: 4),
-                      Icon(
-                        Icons.arrow_forward_rounded,
-                        size: 15,
-                        color: Color(0xFFE11D48),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- 4. Quick Shortcuts Grid ---
-  Widget _shortcuts() {
-    final items = <(String, IconData, Color, VoidCallback)>[
-      (
-      'অ্যাম্বুলেন্স',
-      Icons.local_hospital_rounded,
-      const Color(0xFFE11D48),
-          () => _find('অ্যাম্বুলেন্স'),
-      ),
-      (
-      'অটো / ভ্যান',
-      Icons.electric_rickshaw_rounded,
-      const Color(0xFF0D9488),
-          () => c.openCategory('local_transport'),
-      ),
-      (
-      'ডাক্তার',
-      Icons.medical_services_rounded,
-      _blue,
-          () => _find('ডাক্তার'),
-      ),
-      (
-      'ফার্মেসি',
-      Icons.local_pharmacy_rounded,
-      const Color(0xFF7C3AED),
-          () => _find('ফার্মেসি'),
-      ),
-      (
-      'স্থানীয় দোকান',
-      Icons.storefront_rounded,
-      const Color(0xFFD97706),
-          () => c.openCategory('local_shops'),
-      ),
-      (
-      'খাবার',
-      Icons.restaurant_rounded,
-      const Color(0xFFEA580C),
-          () => c.openCategory('food'),
-      ),
-      (
-      'মিস্ত্রি',
-      Icons.handyman_rounded,
-      const Color(0xFF0284C7),
-          () => c.openCategory('home_services'),
-      ),
-      (
-      'সব সেবা',
-      Icons.grid_view_rounded,
-      const Color(0xFF4F46E5),
-      _menu,
-      ),
-    ];
-
-    return _panel(
-      'দ্রুত সেবা',
-      subtitle: 'প্রয়োজনীয় ক্যাটাগরি বেছে নিন',
-      action: _menu,
-      child: LayoutBuilder(
-        builder: (context, box) {
-          final columns = box.maxWidth < 290 ||
-              MediaQuery.textScalerOf(context).scale(13) > 19
-              ? 2
-              : 4;
-
-          final width = (box.maxWidth - (columns - 1) * 10) / columns;
-
-          return Wrap(
-            spacing: 10,
-            runSpacing: 12,
-            children: [
-              for (final item in items)
-                SizedBox(
-                  width: width,
-                  child: Material(
-                    color: const Color(0xFFF8FAFC),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      side: const BorderSide(
-                        color: Color(0xFFEDF2F7),
-                      ),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: item.$4,
-                      splashColor: item.$3.withValues(alpha: 0.12),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 14,
-                          horizontal: 4,
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _TileIcon(item.$2, item.$3),
-                            const SizedBox(height: 10),
-                            _Label(
-                              item.$1,
-                              size: 12.5,
-                              weight: FontWeight.w600,
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  // --- 5. Area Services Section ---
-  Widget _services() {
-    return _panel(
-      'স্থানীয় সেবা',
-      subtitle: 'আপনার এলাকার নির্ভরযোগ্য সেবাসমূহ',
-      action: _allServices,
-      child: Obx(() {
-        final data = c.community;
-        final services = c.areaServices.take(3).toList();
-
-        return Column(
-          children: [
-            if (data.servicesLoading.value)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-
-            if (data.servicesError.value.isNotEmpty)
-              _message(
-                data.servicesError.value,
-                retry: true,
-              ),
-
-            if (!data.servicesLoading.value &&
-                data.servicesError.value.isEmpty &&
-                services.isEmpty)
-              _message(
-                'এই তালিকায় সেবা পাওয়া যায়নি। '
-                    'সব সেবা দেখুন বা এলাকা বদলান।',
-              ),
-
-            for (final service in services)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _serviceCard(service),
-              ),
-          ],
-        );
-      }),
-    );
-  }
-
-  Widget _serviceCard(ServiceSummary service) {
-    final subtitleText = [
-      service.subtitle,
-      service.areas.take(2).join(' · '),
-    ].whereType<String>().where((text) => text.isNotEmpty).join('\n');
-
-    return Material(
-      color: const Color(0xFFF8FAFC),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: Color(0xFFEDF2F7)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => c.openService(service),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 58,
-                height: 58,
-                child: _Photo(
-                  service.imageUrl,
-                  icon: Icons.storefront_rounded,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Label(
-                      service.name,
-                      weight: FontWeight.w700,
-                      size: 15,
-                      maxLines: 2,
-                    ),
-                    if (subtitleText.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      _Label(
-                        subtitleText,
-                        size: 12,
-                        color: _muted,
-                        maxLines: 2,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _border),
-                ),
-                child: const Icon(
-                  Icons.chevron_right_rounded,
-                  color: _blue,
-                  size: 20,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- 6. Hello Store Section ---
-  Widget _shopping() {
-    return _panel(
-      'Hello Store',
-      subtitle: 'নিত্যপ্রয়োজনীয় পণ্য অর্ডার করুন ঘরে বসে',
-      action: _store,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Store Promo Banner
-          Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFFEFF6FF),
-                  Color(0xFFE0F2FE),
-                ],
-              ),
-              border: Border.all(color: const Color(0xFFBFDBFE)),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              borderRadius: BorderRadius.circular(18),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: _store,
+  Widget header() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(children: [
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: surface(
+              InkWell(
+                onTap: c.selectArea,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  child: Row(
-                    children: [
-                      const _TileIcon(
-                        Icons.shopping_bag_rounded,
-                        _blue,
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _Label(
-                              'আপনার কেনাকাটার ঠিকানা',
-                              weight: FontWeight.w700,
-                              size: 15,
-                            ),
-                            SizedBox(height: 2),
-                            _Label(
-                              'Hello Dimla-র নিজস্ব অনলাইন স্টোর',
-                              size: 12,
-                              color: _muted,
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: const BoxDecoration(
-                          color: _blue,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.arrow_forward_rounded,
-                          color: Colors.white,
-                          size: 16,
-                        ),
-                      ),
-                    ],
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.location_on_rounded, color: _blue, size: 18),
+                    const SizedBox(width: 6),
+                    Flexible(child: Obx(() => label(
+                      c.community.selectedArea.value,
+                      weight: FontWeight.w700,
+                      lines: 1,
+                    ))),
+                    const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
+                  ]),
                 ),
               ),
+              r: 30,
             ),
           ),
-          const SizedBox(height: 14),
-          Obx(() {
-            final data = c.community;
-            final products = data.products.take(4).toList();
-
-            return Column(
-              children: [
-                if (data.productsLoading.value)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 10),
-                    child: LinearProgressIndicator(minHeight: 2),
-                  ),
-
-                if (data.productsError.value.isNotEmpty)
-                  _message(
-                    data.productsError.value,
-                    retry: true,
-                  ),
-
-                if (!data.productsLoading.value &&
-                    data.productsError.value.isEmpty &&
-                    products.isEmpty)
-                  _message('পণ্য যোগ হলে এখানে দেখা যাবে।'),
-
-                LayoutBuilder(
-                  builder: (context, box) {
-                    final columns = box.maxWidth < 260 ||
-                        MediaQuery.textScalerOf(context).scale(14) > 22
-                        ? 1
-                        : 2;
-
-                    final width =
-                        (box.maxWidth - (columns - 1) * 12) / columns;
-
-                    return Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        for (final product in products)
-                          SizedBox(
-                            width: width,
-                            child: _product(product),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            );
-          }),
-        ],
+        ),
+        action(Icons.bookmark_border_rounded, 'সেভ করা', c.openSaved),
+        const SizedBox(width: 8),
+        Obx(() => action(
+          Icons.notifications_none_rounded,
+          'নোটিফিকেশন',
+          c.openNotifications,
+          count: c.community.unreadCount,
+        )),
+      ]),
+      const SizedBox(height: 10),
+      Text.rich(
+        const TextSpan(text: 'Hello ', children: [
+          TextSpan(text: 'Dimla', style: TextStyle(color: _blue)),
+        ]),
+        style: GoogleFonts.poppins(
+          fontSize: 28,
+          fontWeight: FontWeight.w800,
+          color: _ink,
+          height: 1.15,
+        ),
       ),
-    );
-  }
-
-  Widget _product(ProductSummary product) {
-    final unitText = product.unit;
-    return Material(
-      color: const Color(0xFFF8FAFC),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: const BorderSide(color: Color(0xFFEDF2F7)),
+      const SizedBox(height: 4),
+      label(
+        'আপনার শহর, আপনার পাশে\nসেবা, কেনাকাটা আর দৈনন্দিন প্রয়োজন এক অ্যাপেই।',
+        size: 13.5,
+        color: _muted,
       ),
+    ],
+  );
+
+  Widget searchBox() => surface(
+    TextField(
+      controller: c.searchInput,
+      textInputAction: TextInputAction.search,
+      onSubmitted: (_) => search(),
+      style: GoogleFonts.hindSiliguri(fontSize: 15, color: _ink),
+      decoration: InputDecoration(
+        border: InputBorder.none,
+        hintText: 'ডাক্তার, অ্যাম্বুলেন্স, দোকান বা পণ্য খুঁজুন...',
+        hintStyle: GoogleFonts.hindSiliguri(fontSize: 14, color: _muted),
+        prefixIcon: const Icon(Icons.search, color: _blue),
+        suffixIcon: Padding(
+          padding: const EdgeInsets.all(5),
+          child: IconButton.filled(
+            onPressed: search,
+            style: IconButton.styleFrom(
+              backgroundColor: _blue,
+              shape: RoundedRectangleBorder(borderRadius: radius(14)),
+            ),
+            icon: const Icon(Icons.arrow_forward, color: Colors.white),
+          ),
+        ),
+      ),
+    ),
+    r: 20,
+  );
+
+  Widget hero() => TweenAnimationBuilder<double>(
+    tween: Tween(begin: 0, end: 1),
+    duration: const Duration(milliseconds: 350),
+    builder: (_, value, child) => Opacity(opacity: value, child: child),
+    child: Container(
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => c.openProduct(product),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Stack(
-                children: [
-                  AspectRatio(
-                    aspectRatio: 1.35,
-                    child: _Photo(
-                      product.imageUrl,
-                      icon: Icons.shopping_bag_outlined,
-                    ),
-                  ),
-                  Positioned(
-                    top: 6,
-                    left: 6,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: product.inStock
-                            ? const Color(0xFF059669).withValues(alpha: 0.9)
-                            : const Color(0xFFE11D48).withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: _Label(
-                        product.inStock ? 'স্টকে আছে' : 'স্টক নেই',
-                        size: 10,
-                        weight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _Label(
-                product.name,
-                weight: FontWeight.w700,
-                size: 14,
-                maxLines: 2,
-              ),
-              if (unitText != null && unitText.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                _Label(
-                  unitText,
-                  size: 11.5,
-                  color: _muted,
-                  maxLines: 1,
-                ),
-              ],
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: _Label(
-                      moneyText(product.priceMinor),
-                      size: 17,
-                      weight: FontWeight.w700,
-                      color: _blue,
-                    ),
-                  ),
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      color: _blue.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.arrow_forward_ios_rounded,
-                      size: 13,
-                      color: _blue,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- 7. News & Announcements Section ---
-  Widget _updates() {
-    return _panel(
-      'ডিমলার খবর ও ঘোষণা',
-      subtitle: 'স্থানীয় আপডেট ও জরুরি নোটিশ',
-      child: Obx(() {
-        final data = c.community;
-
-        return Column(
-          children: [
-            if (data.updatesLoading.value)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 10),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-
-            if (data.updatesError.value.isNotEmpty)
-              _message(
-                data.updatesError.value,
-                retry: true,
-              ),
-
-            if (!data.updatesLoading.value &&
-                data.updatesError.value.isEmpty &&
-                data.updates.isEmpty)
-              _message('নতুন স্থানীয় ঘোষণা এলে এখানে দেখুন।'),
-
-            for (final update in data.updates.take(3))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Material(
-                  color: const Color(0xFFFFFBEB),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    side: const BorderSide(color: Color(0xFFFEF3C7)),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () => c.openUpdate(update),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Row(
-                        children: [
-                          const _TileIcon(
-                            Icons.campaign_rounded,
-                            Color(0xFFD97706),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _Label(
-                                  update.title,
-                                  weight: FontWeight.w700,
-                                  size: 14.5,
-                                  maxLines: 2,
-                                ),
-                                const SizedBox(height: 4),
-                                _Label(
-                                  [
-                                    update.label,
-                                    dateText(update.publishedAt),
-                                  ]
-                                      .whereType<String>()
-                                      .where((text) => text.isNotEmpty)
-                                      .join(' · '),
-                                  size: 12,
-                                  color: const Color(0xFF92400E),
-                                  maxLines: 2,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          const Icon(
-                            Icons.chevron_right_rounded,
-                            color: Color(0xFFD97706),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        );
-      }),
-    );
-  }
-
-  // --- 8. Saved Items Card ---
-  Widget _saved() {
-    return _Surface(
-      child: InkWell(
-        onTap: c.openSaved,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
-          ),
-          child: Row(
-            children: [
-              const _TileIcon(
-                Icons.bookmarks_rounded,
-                Color(0xFF7C3AED),
-              ),
-              const SizedBox(width: 14),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Label(
-                      'আপনার সেভ করা তালিকা',
-                      weight: FontWeight.w700,
-                      size: 16,
-                    ),
-                    SizedBox(height: 2),
-                    _Label(
-                      'পছন্দের সেবা ও পণ্যগুলো এক জায়গায় দেখুন',
-                      size: 12.5,
-                      color: _muted,
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3E8FF),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.arrow_forward_rounded,
-                  color: Color(0xFF7C3AED),
-                  size: 18,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- Reusable Section Panel ---
-  Widget _panel(
-      String title, {
-        String? subtitle,
-        required Widget child,
-        VoidCallback? action,
-      }) {
-    return _Surface(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 4,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: _blue,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _Label(
-                        title,
-                        size: 18,
-                        weight: FontWeight.w700,
-                      ),
-                      if (subtitle != null)
-                        _Label(
-                          subtitle,
-                          size: 12,
-                          color: _muted,
-                        ),
-                    ],
-                  ),
-                ),
-                if (action != null)
-                  Material(
-                    color: _blue.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(20),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(20),
-                      onTap: action,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _Label(
-                              'সব দেখুন',
-                              size: 12,
-                              color: _blue,
-                              weight: FontWeight.w700,
-                            ),
-                            SizedBox(width: 2),
-                            Icon(
-                              Icons.chevron_right_rounded,
-                              size: 16,
-                              color: _blue,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            child,
-          ],
-        ),
-      ),
-    );
-  }
-
-  // --- Empty / Error State Message ---
-  Widget _message(
-      String message, {
-        bool retry = false,
-      }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFEDF2F7)),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            retry ? Icons.error_outline_rounded : Icons.inbox_outlined,
-            color: _muted,
-            size: 28,
-          ),
-          const SizedBox(height: 6),
-          _Label(
-            message,
-            color: _muted,
-            size: 13,
-            textAlign: TextAlign.center,
-          ),
-          if (retry) ...[
-            const SizedBox(height: 6),
-            TextButton.icon(
-              onPressed: _refresh,
-              icon: const Icon(
-                Icons.refresh_rounded,
-                color: _blue,
-                size: 18,
-              ),
-              label: const _Label(
-                'আবার চেষ্টা করুন',
-                color: _blue,
-                weight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-// --- Top Bar Circular Button ---
-class _CircleActionBtn extends StatelessWidget {
-  const _CircleActionBtn({
-    required this.icon,
-    required this.tooltip,
-    required this.onTap,
-    this.badgeCount = 0,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onTap;
-  final int badgeCount;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      shape: const CircleBorder(
-        side: BorderSide(color: _border),
-      ),
-      child: IconButton(
-        tooltip: tooltip,
-        onPressed: onTap,
-        icon: Badge(
-          isLabelVisible: badgeCount > 0,
-          backgroundColor: const Color(0xFFE11D48),
-          label: Text(
-            badgeCount > 99 ? '99+' : '$badgeCount',
-            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
-          ),
-          child: Icon(
-            icon,
-            color: _ink,
-            size: 22,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// --- Typography Helper ---
-class _Label extends StatelessWidget {
-  const _Label(
-      this.text, {
-        this.size = 14,
-        this.color = _ink,
-        this.weight = FontWeight.w400,
-        this.maxLines,
-        this.textAlign,
-      });
-
-  final String text;
-  final double size;
-  final Color color;
-  final FontWeight weight;
-  final int? maxLines;
-  final TextAlign? textAlign;
-
-  static final _styles = <FontWeight, TextStyle>{
-    FontWeight.w400: GoogleFonts.hindSiliguri(
-      fontWeight: FontWeight.w400,
-    ),
-    FontWeight.w600: GoogleFonts.hindSiliguri(
-      fontWeight: FontWeight.w600,
-    ),
-    FontWeight.w700: GoogleFonts.hindSiliguri(
-      fontWeight: FontWeight.w700,
-    ),
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      maxLines: maxLines,
-      overflow: maxLines == null ? null : TextOverflow.ellipsis,
-      textAlign: textAlign,
-      style: (_styles[weight] ?? _styles[FontWeight.w400]!).copyWith(
-        fontSize: size,
-        color: color,
-        height: 1.38,
-      ),
-    );
-  }
-}
-
-
-
-// --- Elevated Card Surface ---
-class _Surface extends StatelessWidget {
-  const _Surface({
-    required this.child,
-  });
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0A0F1E36),
-            blurRadius: 20,
-            offset: Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        clipBehavior: Clip.antiAlias,
-        child: child,
-      ),
-    );
-  }
-}
-
-
-
-// --- Modern Gradient Tile Icon ---
-class _TileIcon extends StatelessWidget {
-  const _TileIcon(this.icon, this.color);
-
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
+        borderRadius: radius(26),
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            color.withValues(alpha: 0.16),
-            color.withValues(alpha: 0.06),
+          colors: [Color(0xff0f2d6b), _blue, Color(0xff088395)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: _blue.withValues(alpha: .20),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(children: [
+        for (final p in [(-35.0, -35.0), (30.0, 185.0)])
+          Positioned(
+            right: p.$1,
+            top: p.$2,
+            child: Container(
+              width: 145,
+              height: 145,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: .08),
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Flexible(
+                fit: FlexFit.loose,
+                flex: 5,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .16),
+                    borderRadius: radius(30),
+                  ),
+                  child: label(
+                    '✨  আমাদের ডিমলা · ডিজিটাল সেবা',
+                    color: Colors.white,
+                    size: 12,
+                    weight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              const Icon(Icons.location_city_rounded, color: Colors.white, size: 32),
+            ]),
+            const SizedBox(height: 18),
+            label('প্রয়োজনের সবকিছু,\nএখন এক জায়গায়।',
+                size: 26, color: Colors.white, weight: FontWeight.w700),
+            const SizedBox(height: 6),
+            label('আপনার এলাকার জরুরি সেবা, দোকানপাট ও যোগাযোগ খুঁজে নিন মুহূর্তেই।',
+                color: const Color(0xffdcebff), size: 13.5),
+            const SizedBox(height: 18),
+            Wrap(spacing: 10, runSpacing: 8, children: [
+              FilledButton.icon(
+                onPressed: menu,
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: _blue,
+                  shape: RoundedRectangleBorder(borderRadius: radius(14)),
+                ),
+                icon: const Icon(Icons.explore, size: 18),
+                label: const Text('সব সেবা দেখুন'),
+              ),
+              OutlinedButton.icon(
+                onPressed: store,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white54),
+                  shape: RoundedRectangleBorder(borderRadius: radius(14)),
+                ),
+                icon: const Icon(Icons.shopping_bag_outlined, size: 18),
+                label: const Text('হ্যালো স্টোর'),
+              ),
+            ]),
+          ]),
+        ),
+      ]),
+    ),
+  );
+
+  Widget panel(
+      String title,
+      String subtitle,
+      Widget body, {
+        VoidCallback? more,
+      }) => surface(
+    Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Container(
+            height: 22,
+            width: 4,
+            decoration: BoxDecoration(color: _blue, borderRadius: radius(4)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            label(title, size: 18, weight: FontWeight.w700),
+            label(subtitle, size: 12, color: _muted),
+          ])),
+          if (more != null)
+            TextButton(
+              onPressed: more,
+              style: TextButton.styleFrom(backgroundColor: _blue.withValues(alpha: .07)),
+              child: label('সব দেখুন  ›', size: 12, color: _blue, weight: FontWeight.w700),
+            ),
+        ]),
+        const SizedBox(height: 16),
+        body,
+      ]),
+    ),
+  );
+
+  Widget feed<T>(
+      HomeFeed<T> data,
+      String empty,
+      Widget Function(List<T>) cards, {
+        bool grid = false,
+      }) => Obx(() {
+    final items = data.items.toList();
+    final loading = data.loading.value;
+    final error = data.error.value;
+
+    if (items.isEmpty && loading) return _Skeleton(grid: grid);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (error.isNotEmpty)
+        TextButton.icon(
+          onPressed: c.refresh,
+          icon: const Icon(Icons.refresh),
+          label: Text('$error · আবার চেষ্টা করুন'),
+        ),
+      if (items.isNotEmpty)
+        cards(items)
+      else if (error.isEmpty)
+        surface(
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              const Icon(Icons.inbox_outlined, color: _muted),
+              const SizedBox(height: 5),
+              label(empty, size: 13, color: _muted),
+            ]),
+          ),
+          color: _tile,
+          r: 14,
+        ),
+    ]);
+  });
+
+  Widget quick() => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(child: label('দ্রুত সেবা', size: 18, weight: FontWeight.w700)),
+          TextButton(onPressed: menu, child: const Text('সব মেনু')),
+        ]),
+        feed(c.quick, 'প্রকাশিত মেনু নেই।', (rows) => Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final m in rows)
+              ActionChip(
+                onPressed: () => c.openMenu(m),
+                label: Text(homeText(m['title'])),
+                avatar: homeFlag(m['hasIcon'])
+                    ? photo(
+                  ServiceApi.menuIcon(
+                    homeInt(m['id']),
+                    revision: homeInt(m['rev']),
+                  ).toString(),
+                  Icons.grid_view_rounded,
+                )
+                    : const Icon(Icons.grid_view_rounded, color: _blue, size: 20),
+              ),
           ],
-        ),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(
-          color: color.withValues(alpha: 0.15),
-        ),
-      ),
-      child: Icon(
-        icon,
-        color: color,
-        size: 25,
-      ),
-    );
-  }
-}
+        )),
+      ]),
+    ),
+  );
 
-
-
-// --- Network Photo with Fallback ---
-class _Photo extends StatelessWidget {
-  const _Photo(
-      this.url, {
-        required this.icon,
-      });
-
-  final String url;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget photo(String url, IconData icon) {
     final fallback = ColoredBox(
-      color: const Color(0xFFEBF1F9),
-      child: Center(
-        child: Icon(
-          icon,
-          color: const Color(0xFF7894BB),
-          size: 28,
-        ),
-      ),
+      color: const Color(0xffebf1f9),
+      child: Center(child: Icon(icon, color: const Color(0xff7894bb))),
     );
 
     final uri = Uri.tryParse(url);
+    if (uri == null || !{'http', 'https'}.contains(uri.scheme) || uri.host.isEmpty) {
+      return fallback;
+    }
 
-    final valid = uri != null &&
-        (uri.scheme == 'https' || uri.scheme == 'http') &&
-        uri.host.isNotEmpty;
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: valid
-          ? Image.network(
-        url,
-        fit: BoxFit.cover,
-        cacheWidth: 600,
-        excludeFromSemantics: true,
-        frameBuilder: (_, child, frame, synchronous) {
-          return synchronous || frame != null ? child : fallback;
-        },
-        errorBuilder: (_, error, trace) => fallback,
-      )
-          : fallback,
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      cacheWidth: 480,
+      frameBuilder: (_, child, frame, synchronous) =>
+      synchronous || frame != null ? child : const _Sweep(),
+      errorBuilder: (_, __, ___) => fallback,
     );
-
-
-
   }
+
+  Widget rowCard(
+      String title,
+      String subtitle,
+      Widget image,
+      VoidCallback open, {
+        Color color = _tile,
+      }) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: surface(
+      InkWell(
+        onTap: open,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(children: [
+            ClipRRect(
+              borderRadius: radius(14),
+              child: SizedBox(width: 58, height: 58, child: image),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              label(title, size: 15, weight: FontWeight.w700, lines: 2),
+              if (subtitle.isNotEmpty) label(subtitle, size: 12, color: _muted, lines: 2),
+            ])),
+            const SizedBox(width: 6),
+            const CircleAvatar(
+              radius: 16,
+              backgroundColor: Colors.white,
+              child: Icon(Icons.chevron_right, color: _blue, size: 20),
+            ),
+          ]),
+        ),
+      ),
+      color: color,
+      r: 16,
+    ),
+  );
+
+  Widget services() => panel(
+    'স্থানীয় সেবা',
+    'আপনার এলাকার নির্ভরযোগ্য সেবাসমূহ',
+    feed(c.services, 'এই ইউনিয়নে এখনো কোনো সেবা প্রকাশিত হয়নি।',
+            (rows) => Column(children: [
+          for (final row in rows)
+            rowCard(
+              homeText(row['name']),
+              [homeText(row['_menu']['title']), c.serviceArea(row)]
+                  .where((s) => s.isNotEmpty).join('\n'),
+              photo(c.photo(row), Icons.storefront_rounded),
+                  () => c.openService(row),
+            ),
+        ])),
+    more: menu,
+  );
+
+  Widget shopping() => panel(
+    'Hello Store',
+    'নিত্যপ্রয়োজনীয় পণ্য অর্ডার করুন ঘরে বসে',
+    Column(children: [
+      rowCard(
+        'আপনার কেনাকাটার ঠিকানা',
+        'Hello Dimla-র নিজস্ব অনলাইন স্টোর',
+        iconTile(Icons.shopping_bag_rounded, _blue),
+        store,
+        color: const Color(0xffeaf3ff),
+      ),
+      feed(c.products, 'এই নির্বাচনে কোনো প্রকাশিত পণ্য নেই।', (rows) =>
+          LayoutBuilder(builder: (context, box) {
+            final columns = box.maxWidth < 260 ||
+                MediaQuery.textScalerOf(context).scale(14) > 22
+                ? 1 : 2;
+            final width = (box.maxWidth - (columns - 1) * 12) / columns;
+
+            return Wrap(spacing: 12, runSpacing: 12, children: [
+              for (final p in rows) SizedBox(width: width, child: product(p)),
+            ]);
+          }), grid: true),
+    ]),
+    more: store,
+  );
+
+  Widget product(RowData p) {
+    final inStock = homeInt(p['stock']) > 0;
+    final price = double.tryParse('${p['price']}');
+
+    return surface(
+      InkWell(
+        onTap: () => c.openProduct(p),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Stack(children: [
+              AspectRatio(
+                aspectRatio: 1.35,
+                child: ClipRRect(
+                  borderRadius: radius(14),
+                  child: photo(homeText(p['photo']), Icons.shopping_bag_outlined),
+                ),
+              ),
+              Positioned(
+                top: 6,
+                left: 6,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: inStock ? const Color(0xff059669) : const Color(0xffe11d48),
+                    borderRadius: radius(12),
+                  ),
+                  child: label(inStock ? 'স্টকে আছে' : 'স্টক নেই',
+                      size: 10, color: Colors.white),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            label(homeText(p['name']), weight: FontWeight.w700, lines: 2),
+            label(homeText(p['label']), size: 12, color: _muted, lines: 1),
+            Row(children: [
+              Expanded(child: label(
+                price == null ? 'দাম দেওয়া নেই' : moneyText((price * 100).round()),
+                size: 17, weight: FontWeight.w700, color: _blue,
+              )),
+              const Icon(Icons.chevron_right, color: _blue),
+            ]),
+          ]),
+        ),
+      ),
+      color: _tile,
+      r: 18,
+    );
+  }
+
+  Widget news() => panel(
+    'ডিমলার খবর ও ঘোষণা',
+    'স্থানীয় আপডেট ও জরুরি নোটিশ',
+    feed(c.news, 'নতুন স্থানীয় ঘোষণা এলে এখানে দেখুন।',
+            (rows) => Column(children: [
+          for (final u in rows)
+            rowCard(
+              u.title,
+              [u.label, dateText(u.publishedAt)]
+                  .where((s) => s.isNotEmpty).join(' · '),
+              iconTile(Icons.campaign_rounded, const Color(0xffd97706)),
+                  () => c.openUpdate(u),
+              color: const Color(0xfffffbeb),
+            ),
+        ])),
+  );
+
+  Widget saved() => rowCard(
+    'আপনার সেভ করা তালিকা',
+    'পছন্দের সেবা ও পণ্যগুলো এক জায়গায় দেখুন',
+    iconTile(Icons.bookmarks_rounded, const Color(0xff7c3aed)),
+    c.openSaved,
+    color: Colors.white,
+  );
+}
+
+class _Skeleton extends StatelessWidget {
+  const _Skeleton({this.grid = false});
+
+  final bool grid;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'লোড হচ্ছে',
+    child: ExcludeSemantics(
+      child: grid
+          ? const Row(children: [
+        Expanded(child: SizedBox(height: 128, child: _Sweep())),
+        SizedBox(width: 12),
+        Expanded(child: SizedBox(height: 128, child: _Sweep())),
+      ])
+          : const Column(children: [
+        SizedBox(height: 52, width: double.infinity, child: _Sweep()),
+        SizedBox(height: 8),
+        SizedBox(height: 52, width: double.infinity, child: _Sweep()),
+      ]),
+    ),
+  );
+}
+
+class _Sweep extends StatefulWidget {
+  const _Sweep();
+
+  @override
+  State<_Sweep> createState() => _SweepState();
+}
+
+class _SweepState extends State<_Sweep> with SingleTickerProviderStateMixin {
+  late final animation = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1150),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context) || !TickerMode.of(context)) {
+      animation.stop();
+    } else if (!animation.isAnimating) {
+      animation.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+    child: AnimatedBuilder(
+      animation: animation,
+      builder: (_, __) {
+        final x = -2 + animation.value * 4;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(
+              begin: Alignment(x - 1, -.2),
+              end: Alignment(x + 1, .2),
+              colors: const [
+                Color(0xffe8eef5),
+                Color(0xfff9fbfe),
+                Color(0xffe8eef5),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }

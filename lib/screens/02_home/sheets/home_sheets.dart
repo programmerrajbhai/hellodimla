@@ -14,7 +14,8 @@ void showUpdateSheet(LocalUpdate update) {
 }
 
 class AreaSelectionSheet extends StatefulWidget {
-  const AreaSelectionSheet({super.key});
+  const AreaSelectionSheet({super.key,this.directoryAreas});
+  final List<String>? directoryAreas;
 
   @override
   State<AreaSelectionSheet> createState() => _AreaSelectionSheetState();
@@ -52,6 +53,9 @@ class _AreaSelectionSheetState extends State<AreaSelectionSheet> {
       return;
     }
 
+    if(widget.directoryAreas!=null && value!='সব এলাকা' && !widget.directoryAreas!.contains(value)){
+      setState(()=>validationMessage='তালিকাভুক্ত একটি ইউনিয়ন নির্বাচন করুন।'); return;
+    }
     await select(value);
   }
 
@@ -75,8 +79,8 @@ class _AreaSelectionSheetState extends State<AreaSelectionSheet> {
             child: Obx(() {
               final areas = {
                 'সব এলাকা',
-                ...community.availableAreas,
-                community.selectedArea.value,
+                ...(widget.directoryAreas ?? community.availableAreas),
+                if(widget.directoryAreas==null) community.selectedArea.value,
               }.toList();
 
               return ListView(

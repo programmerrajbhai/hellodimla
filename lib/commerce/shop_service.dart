@@ -1,1390 +1,329 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
+import 'dart:io';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:get/get.dart';
-import 'package:sqflite/sqflite.dart' hide Transaction;
 
-import '../services/saved_items_store.dart';
-import 'inventory_mutation.dart';
+import '../core/network/service_api.dart';
+import '../services/community_service.dart';
 import 'shop_models.dart';
+import 'shop_service_base.dart' as old;
 
-class ShopService extends GetxService {
-  static ShopService get instance => Get.isRegistered<ShopService>()
-      ? Get.find<ShopService>()
-      : Get.put(ShopService(), permanent: true);
+typedef _Row = Map<String, dynamic>;
 
-  final db = FirebaseFirestore.instance;
-  final auth = FirebaseAuth.instance;
-  final saved = SavedItemsStore.instance;
-
-  final products = <ShopProduct>[].obs;
-  final cart = <CartLine>[].obs;
-  final addresses = <Map<String, dynamic>>[].obs;
-
-  final config = Rxn<StoreConfig>();
-  final pending = Rxn<Map<String, dynamic>>();
-
-  final validation = <String, Map<String, dynamic>>{}.obs;
-
-  final loading = false.obs;
-  final busy = false.obs;
-  final localReady = false.obs;
-
-  final error = ''.obs;
-  final localError = ''.obs;
-
-  Future<void>? _localTask;
-  Future<void>? _catalogTask;
-  Future<Database>? _databaseTask;
-
-  Map<String, dynamic> _state = {};
-
-  bool get locked => pending.value != null;
-
-  int get units => cart.fold(0, (n, x) => n + x.qty);
-
-  int get subtotal => cart.fold(0, (n, x) => n + x.subtotal);
-
-  List<Map<String, dynamic>> get items =>
-      cart.map((x) => x.request).toList();
-
-  String newId() {
-    final random = Random.secure();
-
-    return List.generate(
-      24,
-          (_) => random.nextInt(16).toRadixString(16),
-    ).join();
-  }
-
-  static const demoStore = <String, dynamic>{
-    'enabled': true,
-    'demoMode': true,
-    'name': 'Hello Store',
-    'bannerTitle': 'পরীক্ষামূলক কেনাকাটা',
-    'bannerSubtitle': 'DEMO • বাস্তব বিক্রি বা delivery নয়।',
-    'supportPhone': '',
-    'policyVersion': 'free-demo-1',
-    'returnWindowDays': 7,
-    'deliveryPolicy':
-    'অর্ডার জমা হলে দোকান stock ও delivery যাচাই করে confirm করবে। Demo order বাস্তব delivery নয়।',
-    'returnPolicy':
-    'Delivered হওয়ার ৭ দিনের মধ্যে ফেরতের আবেদন। অনুমোদন ও refund আলাদা।',
-    'deliveryZones': [
-      {
-        'id': 'dimla_test',
-        'label': 'ডিমলা — পরীক্ষা এলাকা',
-        'enabled': true,
-        'chargeMinor': 4000,
-        'minSubtotalMinor': 0,
-        'maxSubtotalMinor': 10000000,
-      },
-    ],
-  };
-
-  static Map<String, dynamic> demoProduct(String id) => {
-    'name': id == 'demo_rice' ? 'ডেমো চাল' : 'ডেমো চা',
-    'categoryId': 'grocery',
-    'categoryName': 'মুদি',
-    'unit': id == 'demo_rice'
-        ? '১ কেজি প্যাকেট'
-        : '১০০ গ্রাম প্যাকেট',
-    'priceMinor': id == 'demo_rice' ? 7500 : 12000,
-    'originalPriceMinor': 0,
-    'stockQty': 20,
-    'published': true,
-    'inStock': true,
-    'featured': true,
-    'demoMode': true,
-    'imageUrl': '',
-    'images': [],
-    'variants': [],
-    'description': 'শুধু app testing-এর ডেমো পণ্য।',
-  };
-
-  Future<void> initialize() async {
-    await loadLocal();
-    await saved.load();
-    await loadCatalog();
-  }
-
-  Future<String> identity() async {
-    if (auth.currentUser == null) {
-      await auth.signInAnonymously();
+class ShopService extends old.ShopService {
+  static ShopService get instance {
+    if (Get.isRegistered<ShopService>()) {
+      return Get.find<ShopService>();
     }
-
-    final uid = auth.currentUser?.uid;
-
-    if (uid == null) {
-      throw StateError('Anonymous Auth চালু করুন।');
-    }
-
-    return uid;
+    return Get.put(ShopService(), permanent: true);
   }
 
-  Future<void> bootstrapDemo() async {
-    await identity();
+  static String message(Object error) => old.ShopService.message(error);
 
-    await db.runTransaction<void>((tx) async {
-      final storeRef = db.doc('app_config/store');
-      final store = await tx.get(storeRef);
+  Worker? _areaWorker;
+  Future<void>? _catalogRequest;
 
-      if (store.exists && store.data()?['demoMode'] != true) {
-        return;
-      }
+  String? _requestedArea;
+  String? _loadedArea;
+  int _loadedZone = 0;
+  int _version = 0;
 
-      final refs = [
-        'demo_rice',
-        'demo_tea',
-      ].map((id) => db.doc('products/$id')).toList();
+  CommunityService? get _community {
+    if (!Get.isRegistered<CommunityService>()) return null;
+    return Get.find<CommunityService>();
+  }
 
-      final docs = <DocumentSnapshot<Map<String, dynamic>>>[];
+  String get _areaName =>
+      _community?.selectedArea.value.trim() ?? 'সব এলাকা';
 
-      for (final ref in refs) {
-        docs.add(await tx.get(ref));
-      }
+  @override
+  void onInit() {
+    super.onInit();
 
-      if (!store.exists) {
-        tx.set(storeRef, demoStore);
-      }
+    final community = _community;
+    if (community == null) return;
 
-      for (var i = 0; i < refs.length; i++) {
-        if (!docs[i].exists) {
-          tx.set(refs[i], demoProduct(refs[i].id));
-        }
+    _areaWorker = ever<String>(community.selectedArea, (_) {
+      if (_requestedArea != null) {
+        unawaited(loadCatalog());
       }
     });
   }
 
-  Future<void> loadLocal() => _localTask ??= _readLocal();
-
-  Future<Database> _database() =>
-      _databaseTask ??= _openDatabase().catchError((Object e) {
-        _databaseTask = null;
-        throw e;
-      });
-
-  Future<Database> _openDatabase() async {
-    final project = db.app.options.projectId.replaceAll(
-      RegExp(r'[^a-zA-Z0-9_-]'),
-      '_',
-    );
-
-    return openDatabase(
-      '${await getDatabasesPath()}/hello_dimla_${project}_commerce.db',
-      version: 1,
-      onConfigure: (database) async {
-        await database.rawQuery('PRAGMA journal_mode = WAL');
-        await database.execute('PRAGMA synchronous = FULL');
-      },
-      onCreate: (database, version) => database.execute(
-        'CREATE TABLE commerce_state '
-            '(id INTEGER PRIMARY KEY, value TEXT NOT NULL)',
-      ),
-    );
+  @override
+  void onClose() {
+    _version++;
+    _areaWorker?.dispose();
+    super.onClose();
   }
 
-  Future<void> _readLocal() async {
-    try {
-      final database = await _database();
+  @override
+  Future<void> loadCatalog() {
+    final name = _areaName;
+    final running = _catalogRequest;
 
-      final rows = await database.query(
-        'commerce_state',
-        where: 'id = ?',
-        whereArgs: [1],
-      );
+    // একই এলাকার জন্য একই সময়ে একাধিক request পাঠাবে না।
+    if (_requestedArea == name && running != null) {
+      return running;
+    }
 
-      _state = rows.isEmpty
-          ? {}
-          : object(jsonDecode(rows.first['value'] as String));
+    final changedArea = _requestedArea != name;
+    final version = ++_version;
+    _requestedArea = name;
 
-      if (rows.isEmpty) {
-        await database.insert('commerce_state', {
-          'id': 1,
-          'value': jsonEncode(_state),
-        });
+    if (changedArea) {
+      products.clear();
+      _loadedArea = null;
+    }
+
+    final task = _loadCatalogFromApi(name, version).whenComplete(() {
+      if (version == _version) {
+        _catalogRequest = null;
       }
+    });
 
-      _apply(_state);
-
-      localReady.value = true;
-      localError.value = '';
-    } catch (_) {
-      localError.value =
-      'সেভ করা cart পড়া যায়নি। আবার চেষ্টা করুন।';
-      _localTask = null;
-    }
+    _catalogRequest = task;
+    return task;
   }
 
-  void _apply(Map<String, dynamic> state) {
-    cart.assignAll(
-      ((state['cart'] as List?) ?? []).map(
-            (x) => CartLine.fromMap(object(x)),
-      ),
+  Future<int> _resolveZone(String name) async {
+    if (name.isEmpty || name == 'সব এলাকা') return 0;
+
+    final directory = await ServiceApi.catalog();
+
+    for (final area in directory.areas) {
+      if (_text(area['name']) == name) {
+        return _intValue(area['id']);
+      }
+    }
+
+    throw StateError(
+      'নির্বাচিত ইউনিয়ন এখন তালিকায় নেই। Home থেকে এলাকা বদলান।',
     );
-
-    addresses.assignAll(
-      ((state['addresses'] as List?) ?? []).map(object),
-    );
-
-    pending.value = state['pending'] == null
-        ? null
-        : object(state['pending']);
   }
 
-  Future<void> _commit(Map<String, dynamic> changes) async {
-    await loadLocal();
-
-    if (!localReady.value) {
-      throw StateError(localError.value);
-    }
-
-    final next = {..._state, ...changes};
-    final database = await _database();
-
-    await database.transaction(
-          (tx) => tx.insert(
-        'commerce_state',
-        {
-          'id': 1,
-          'value': jsonEncode(next),
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      ),
-    );
-
-    _state = next;
-    _apply(next);
-  }
-
-  Future<T> operation<T>(Future<T> Function() action) async {
-    if (busy.value) {
-      throw StateError('আগের কাজটি শেষ হতে দিন।');
-    }
-
-    busy.value = true;
-
-    try {
-      return await action();
-    } finally {
-      busy.value = false;
-    }
-  }
-
-  void _editable() {
-    if (locked) {
-      throw StateError(
-        'আগের order attempt-এর ফল নিশ্চিত করুন।',
-      );
-    }
-  }
-
-  Future<void> loadCatalog() =>
-      _catalogTask ??= _fetchCatalog().whenComplete(
-            () => _catalogTask = null,
-      );
-
-  Future<void> _fetchCatalog() async {
+  Future<void> _loadCatalogFromApi(String name, int version) async {
     loading.value = true;
     error.value = '';
 
     try {
-      await bootstrapDemo();
+      final zone = await _resolveZone(name);
+      if (version != _version) return;
 
-      final store = await db.doc('app_config/store').get(
-        const GetOptions(source: Source.server),
-      );
+      final data = await _fetchStore(zone);
+      final result = _parseProducts(data);
+      final settings = object(data['settings']);
+      final zones = _rows(data['zones']);
 
-      final live = store.data()?['demoMode'] != true;
-      final loaded = <ShopProduct>[];
+      final deliveryZones = <Map<String, dynamic>>[
+        for (final z in zones)
+          {
+            'id': '${z['id']}',
+            'label': _text(z['name']),
+            'enabled': true,
+            'chargeMinor': _moneyToMinor(z['fee']),
+          },
+      ];
 
-      QueryDocumentSnapshot<Map<String, dynamic>>? last;
+      if (version != _version) return;
 
-      while (true) {
-        Query<Map<String, dynamic>> query = db
-            .collection('products')
-            .where('published', isEqualTo: true)
-            .orderBy(FieldPath.documentId)
-            .limit(100);
+      _loadedArea = name;
+      _loadedZone = zone;
 
-        if (last != null) {
-          query = query.startAfterDocument(last);
-        }
+      config.value = StoreConfig({
 
-        final page = await query.get(
-          const GetOptions(source: Source.server),
-        );
+        'categories': _rows(data['categories']),
+        'shelves': _rows(data['shelves'] ?? []),
+        'shelfItems': _rows(data['shelfItems'] ?? []),
+        'name': 'Hello Store',
+        'demoMode': false,
+        'enabled': deliveryZones.isNotEmpty,
+        'bannerSubtitle': 'স্মার্ট ডিমলার নিজস্ব অনলাইন স্টোর',
+        'supportPhone': _text(settings['phone']),
+        'deliveryZones': deliveryZones,
+        'deliveryPolicy': deliveryZones.isEmpty
+            ? 'বর্তমানে কোনো ডেলিভারি ইউনিয়ন চালু নেই।'
+            : deliveryZones.map((z) {
+          final fee = money(z['chargeMinor'] as int);
+          return "${z['label']} · $fee";
+        }).join('\n'),
+        if (_text(settings['returns_text']).isNotEmpty)
+          'returnPolicy': _text(settings['returns_text']),
+      });
 
-        for (final doc in page.docs) {
-          if (live && doc.data()['demoMode'] == true) {
-            continue;
-          }
-
-          loaded.add(
-            ShopProduct.fromMap(doc.id, doc.data()),
-          );
-        }
-
-        if (page.docs.length < 100) break;
-
-        last = page.docs.last;
-      }
-
-      config.value = store.exists
-          ? StoreConfig(store.data()!)
-          : null;
-
-      products.assignAll(loaded);
+      // আগের UI এই একই observable তালিকা থেকেই কার্ড তৈরি করে।
+      products.assignAll(result);
     } catch (e) {
-      error.value = message(e);
+      if (version == _version) {
+        error.value = message(e);
+      }
     } finally {
-      loading.value = false;
+      if (version == _version) {
+        loading.value = false;
+      }
     }
   }
 
+  // Home থেকে "mysql:12" এবং সরাসরি "12" — দুই ধরনের ID-ই নেয়।
+  @override
   Future<ShopProduct?> product(String id) async {
-    final result = await db
-        .collection('products')
-        .where('published', isEqualTo: true)
-        .where(FieldPath.documentId, isEqualTo: id)
-        .limit(1)
-        .get(const GetOptions(source: Source.server));
+    final rawId = id.startsWith('mysql:') ? id.substring(6) : id;
+    final numericId = int.tryParse(rawId);
+    if (numericId == null || numericId <= 0) return null;
 
-    if (result.docs.isEmpty) return null;
+    final name = _areaName;
+    final zone = _loadedArea == name
+        ? _loadedZone
+        : await _resolveZone(name);
 
-    final doc = result.docs.first;
+    final result = _parseProducts(await _fetchStore(zone));
 
-    return ShopProduct.fromMap(doc.id, doc.data());
+    if (name != _areaName) {
+      throw StateError('এলাকা বদলেছে। পণ্যটি আবার খুলুন।');
+    }
+
+    for (final item in result) {
+      if (item.id == 'mysql:$numericId') return item;
+    }
+
+    return null;
   }
 
-  Future<void> add(
-      ShopProduct p,
-      ShopVariant v,
-      int qty,
-      ) =>
-      operation(() async {
-        await loadLocal();
-        _editable();
-
-        final key = '${p.id}:${p.variants.isEmpty ? '' : v.id}';
-
-        CartLine? old;
-
-        for (final x in cart) {
-          if (x.key == key) {
-            old = x;
-            break;
-          }
-        }
-
-        final count = (old?.qty ?? 0) + qty;
-
-        if (!v.available ||
-            qty < 1 ||
-            count > min(v.stock, 99)) {
-          throw StateError(
-            'Stock-এর বেশি নেওয়া যাবে না।',
-          );
-        }
-
-        if (old == null && cart.length >= 5) {
-          throw StateError(
-            'এক order-এ সর্বোচ্চ ৫ ধরনের পণ্য।',
-          );
-        }
-
-        final next = cart.where((x) => x.key != key).toList()
-          ..add(CartLine.fromProduct(p, v, count));
-
-        await _commit({
-          'cart': next.map((x) => x.toMap()).toList(),
-        });
-
-        validation.clear();
-      });
-
-  Future<void> quantity(CartLine line, int qty) =>
-      operation(() async {
-        _editable();
-
-        final cap = min(
-          99,
-          number(validation[line.key]?['stockQty'], 99),
-        );
-
-        if (qty < 1 || qty > cap) {
-          throw StateError(
-            'পরিমাণ stock ও ১–৯৯ সীমার মধ্যে রাখুন।',
-          );
-        }
-
-        await _commit({
-          'cart': cart
-              .map(
-                (x) => x.key == line.key
-                ? x.withQuantity(qty).toMap()
-                : x.toMap(),
-          )
-              .toList(),
-        });
-
-        validation.clear();
-      });
-
-  Future<void> remove(CartLine line) =>
-      operation(() async {
-        _editable();
-
-        await _commit({
-          'cart': cart
-              .where((x) => x.key != line.key)
-              .map((x) => x.toMap())
-              .toList(),
-        });
-
-        validation.remove(line.key);
-      });
-
-  Future<void> clear() => operation(() async {
-    _editable();
-
-    await _commit({'cart': []});
-
-    validation.clear();
-  });
-
-  List<Map<String, dynamic>> _requests(
-      List<dynamic> source,
-      ) {
-    if (source.isEmpty || source.length > 5) {
-      throw StateError(
-        'এক order-এ ১–৫ ধরনের পণ্য রাখুন।',
-      );
-    }
-
-    final list = source.map((x) => object(x)).toList();
-    final keys = <String>{};
-
-    for (final x in list) {
-      final pid = '${x['productId']}';
-      final vid = '${x['variantId'] ?? ''}';
-
-      if (!RegExp(r'^[a-zA-Z0-9_-]{1,128}$').hasMatch(pid) ||
-          !RegExp(r'^[a-zA-Z0-9_-]{0,128}$').hasMatch(vid) ||
-          x['qty'] is! int ||
-          number(x['qty']) < 1 ||
-          number(x['qty']) > 99 ||
-          !keys.add('$pid:$vid')) {
-        throw StateError('Cart-এর তথ্য সঠিক নয়।');
-      }
-    }
-
-    list.sort(
-          (a, b) => '${a['productId']}:${a['variantId']}'.compareTo(
-        '${b['productId']}:${b['variantId']}',
-      ),
-    );
-
-    return list;
-  }
-
-  Future<List<Map<String, dynamic>>> _lines(
-      Transaction tx,
-      List<Map<String, dynamic>> requests,
-      ) async {
-    final result = <Map<String, dynamic>>[];
-
-    for (final x in requests) {
-      final doc = await tx.get(
-        db.doc('products/${x['productId']}'),
-      );
-
-      final raw = doc.data();
-
-      final p = raw == null
-          ? null
-          : ShopProduct.fromMap(doc.id, raw);
-
-      final v = p?.choice('${x['variantId'] ?? ''}');
-
-      final valid = raw?['published'] == true &&
-          v != null &&
-          v.available &&
-          number(x['qty']) <= v.stock;
-
-      if (!valid || p == null || v == null) {
-        result.add({
-          ...x,
-          'valid': false,
-          'stockQty': v?.stock ?? 0,
-          'message': 'পণ্য/variant নেই অথবা পর্যাপ্ত stock নেই।',
-        });
-      } else {
-        result.add({
-          ...CartLine.fromProduct(
-            p,
-            v,
-            number(x['qty']),
-          ).toMap(),
-          'variantIndex': p.variants.isEmpty
-              ? -1
-              : p.variants.indexOf(v),
-          'subtotalMinor': v.price * number(x['qty']),
-          'stockQty': v.stock,
-          'valid': true,
-          'productDemo': raw?['demoMode'] == true,
-        });
-      }
-    }
-
-    return result;
-  }
-
-  Future<List<Map<String, dynamic>>> checkCart() =>
-      operation(() async {
-        final checked = await db.runTransaction(
-              (tx) => _lines(tx, _requests(items)),
-        );
-
-        validation.assignAll({
-          for (final x in checked)
-            '${x['productId']}:${x['variantId']}': x,
-        });
-
-        return checked;
-      });
-
-  Future<void> acceptPrices(
-      List<Map<String, dynamic>> checked,
-      ) =>
-      operation(() async {
-        _editable();
-
-        final fresh = {
-          for (final x in checked)
-            '${x['productId']}:${x['variantId']}': x,
-        };
-
-        await _commit({
-          'cart': cart
-              .map(
-                (x) => fresh[x.key]?['valid'] == true
-                ? CartLine.fromMap(fresh[x.key]!).toMap()
-                : x.toMap(),
-          )
-              .toList(),
-        });
-      });
-
-  String _text(
-      dynamic value,
-      int minLength,
-      int maxLength,
-      ) {
-    final text = '${value ?? ''}'.trim();
-
-    if (text.length < minLength ||
-        text.length > maxLength) {
-      throw StateError(
-        'ঠিকানার তথ্য সঠিক দৈর্ঘ্যে লিখুন।',
-      );
-    }
-
-    return text;
-  }
-
-  Future<Map<String, dynamic>> _quote(
-      Transaction tx,
-      List<Map<String, dynamic>> requests,
-      Map<String, dynamic> input,
-      ) async {
-    final store = await tx.get(
-      db.doc('app_config/store'),
-    );
-
-    final cfg = store.data();
-
-    if (cfg == null || cfg['enabled'] != true) {
-      throw StateError(
-        'Store এখন order নিচ্ছে না।',
-      );
-    }
-
-    final policy = (
-        await tx.get(db.doc('app_config/app'))
-    ).data();
-
-    final demo = cfg['demoMode'] == true;
-
-    if (!demo && !_publishedPolicies(policy)) {
-      throw StateError(
-        'Store-এর Privacy, Terms ও deletion তথ্য এখনও প্রস্তুত নয়।',
-      );
-    }
-
-    final zones = ((cfg['deliveryZones'] as List?) ?? [])
-        .map(object)
-        .toList();
-
-    final index = zones.indexWhere(
-          (z) =>
-      z['id'] == input['zoneId'] &&
-          z['enabled'] == true,
-    );
-
-    if (index < 0) {
-      throw StateError(
-        'এই এলাকায় delivery চালু নেই।',
-      );
-    }
-
-    final zone = zones[index];
-
-    var phone = normalized(
-      _text(input['phone'], 11, 24),
-    ).replaceAll(RegExp(r'[\s()-]'), '');
-
-    if (phone.startsWith('+88')) {
-      phone = phone.substring(3);
-    }
-
-    if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(phone)) {
-      throw StateError(
-        'সঠিক মোবাইল নম্বর দিন।',
-      );
-    }
-
-    final address = <String, dynamic>{
-      'name': _text(input['name'], 2, 80),
-      'phone': phone,
-      'zoneId': zone['id'],
-      'zoneLabel': zone['label'],
-      'zoneIndex': index,
-      'address': _text(input['address'], 8, 400),
-      'landmark': _text(input['landmark'], 0, 160),
-      'note': _text(input['note'], 0, 300),
+  static List<ShopProduct> _parseProducts(_Row data) {
+    final categories = <int, String>{
+      for (final c in _rows(data['categories']))
+        _intValue(c['id']): _text(c['name']),
     };
 
-    final checked = await _lines(tx, requests);
-
-    if (checked.any((x) => x['valid'] != true)) {
-      throw StateError(
-        'Stock/availability বদলেছে। Cart যাচাই করুন।',
-      );
-    }
-
-    if (cfg['demoMode'] != true &&
-        checked.any((x) => x['productDemo'] == true)) {
-      throw StateError(
-        'বাস্তব order-এ demo পণ্য নেওয়া যাবে না।',
-      );
-    }
-
-    final lines = checked
-        .map(
-          (x) => Map<String, dynamic>.from(x)
-        ..remove('valid')
-        ..remove('stockQty')
-        ..remove('productDemo'),
-    )
-        .toList();
-
-    final subtotal = lines.fold<int>(
-      0,
-          (n, x) => n + number(x['subtotalMinor']),
-    );
-
-    if (subtotal < number(zone['minSubtotalMinor']) ||
-        subtotal >
-            number(zone['maxSubtotalMinor'], 10000000)) {
-      throw StateError(
-        'এই এলাকার order-এর টাকার সীমা পূরণ হয়নি।',
-      );
-    }
-
-    final fee = number(zone['chargeMinor'], -1);
-
-    if (fee < 0 || subtotal + fee > 100000000) {
-      throw StateError(
-        'Delivery charge/config ঠিক করুন।',
-      );
-    }
-
-    final quote = <String, dynamic>{
-      'address': address,
-      'lines': lines,
-      'subtotalMinor': subtotal,
-      'deliveryMinor': fee,
-      'discountMinor': 0,
-      'totalMinor': subtotal + fee,
-      'demoMode': cfg['demoMode'] == true,
-      'deliveryPolicy': '${cfg['deliveryPolicy'] ?? ''}',
-      'returnPolicy': '${cfg['returnPolicy'] ?? ''}',
-      'policyVersion': '${cfg['policyVersion'] ?? ''}',
-      'returnWindowDays': number(cfg['returnWindowDays']),
-      'supportPhone': '${cfg['supportPhone'] ?? ''}',
-      'appPolicyVersion': demo
-          ? 'demo'
-          : policy!['policyVersion'],
+    final featuredIds = <int>{
+      for (final item in _rows(data['shelfItems'] ?? []))
+        _intValue(item['product_id']),
     };
 
-    quote['fingerprint'] = jsonEncode(quote);
+    // API প্রতি প্যাকের জন্য একটি row দেয়।
+    // একই জুতার একাধিক সাইজ থাকলেও তালিকায় একটি কার্ড হবে।
+    final grouped = <int, List<_Row>>{};
 
-    return quote;
-  }
-
-  Future<Map<String, dynamic>> quote(
-      Map<String, dynamic> address,
-      ) =>
-      operation(() async {
-        await identity();
-
-        return db.runTransaction(
-              (tx) => _quote(
-            tx,
-            _requests(items),
-            address,
-          ),
-        );
-      });
-
-  Future<String> place(
-      Map<String, dynamic> quote,
-      ) =>
-      operation(() async {
-        await loadLocal();
-
-        final uid = await identity();
-
-        if (!locked) {
-          if (quote['fingerprint'] is! String) {
-            throw StateError(
-              'আগে মোট টাকা যাচাই করুন।',
-            );
-          }
-
-          await _commit({
-            'pending': {
-              'backend': 'firestore_v1',
-              'ownerUid': uid,
-              'requestId': newId(),
-              'items': _requests(items),
-              'address': object(quote['address']),
-              'fingerprint': quote['fingerprint'],
-            },
-          });
-        }
-
-        final attempt = Map<String, dynamic>.from(
-          pending.value!,
-        );
-
-        _checkAttempt(attempt, uid);
-
-        final requestId = '${attempt['requestId']}';
-        final id = '${uid}_$requestId';
-
-        final requests = _requests(
-          attempt['items'] as List,
-        );
-
-        final address = object(attempt['address']);
-
-        final intent = jsonEncode({
-          'items': requests,
-          'address': address,
-          'fingerprint': attempt['fingerprint'],
-        });
-
-        final orderRef = db.doc('orders/$id');
-
-        try {
-          await db.runTransaction<void>((tx) async {
-            final existing = await tx.get(orderRef);
-
-            if (existing.exists) {
-              if (existing.data()?['status'] == 'abandoned') {
-                throw StateError(
-                  'এই attempt বন্ধ করা হয়েছে।',
-                );
-              }
-
-              if (existing.data()?['intentHash'] != intent) {
-                throw StateError(
-                  'একই attempt-এর তথ্য মেলেনি।',
-                );
-              }
-
-              return;
-            }
-
-            final fresh = await _quote(
-              tx,
-              requests,
-              address,
-            );
-
-            if (fresh['fingerprint'] !=
-                attempt['fingerprint']) {
-              throw StateError(
-                'দাম/charge/policy বদলেছে। '
-                    'Attempt বন্ধ করে আবার মোট টাকা যাচাই করুন।',
-              );
-            }
-
-            final data = Map<String, dynamic>.from(fresh)
-              ..remove('fingerprint');
-
-            final stockWrites = await _stockWrites(
-              tx,
-              (fresh['lines'] as List).map(object).toList(),
-              requestId,
-              -1,
-            );
-
-            tx.set(orderRef, {
-              ...data,
-              'ownerUid': uid,
-              'requestId': requestId,
-              'orderNumber': 'HD-$requestId',
-              'intentHash': intent,
-              'inventoryVersion': 1,
-              'lineKeys': (fresh['lines'] as List)
-                  .map(
-                    (x) =>
-                '${x['productId']}:${x['variantId']}',
-              )
-                  .toList(),
-              'status': 'placed',
-              'paymentMethod': 'cod',
-              'paymentStatus': 'unpaid',
-              'createdAt': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-              'statusHistory': [],
-            });
-
-            final lines = fresh['lines'] as List;
-
-            for (var i = 0; i < lines.length; i++) {
-              tx.set(
-                orderRef.collection('items').doc('$i'),
-                object(lines[i]),
-              );
-            }
-
-            for (final entry in stockWrites.entries) {
-              tx.update(
-                db.doc('products/${entry.key}'),
-                entry.value,
-              );
-            }
-          });
-        } on FirebaseException {
-          final existing = await orderRef.get(
-            const GetOptions(source: Source.server),
-          );
-
-          if (existing.data()?['ownerUid'] != uid ||
-              existing.data()?['intentHash'] != intent) {
-            rethrow;
-          }
-        }
-
-        final previous = addresses
-            .where(
-              (x) =>
-          x['address'] != address['address'] ||
-              x['phone'] != address['phone'],
-        )
-            .toList();
-
-        await _commit({
-          'cart': [],
-          'pending': null,
-          'addresses': [
-            address,
-            ...previous,
-          ].take(5).toList(),
-        });
-
-        validation.clear();
-
-        return id;
-      });
-
-  void _checkAttempt(
-      Map<String, dynamic> attempt,
-      String uid,
-      ) {
-    if (attempt['ownerUid'] != uid) {
-      throw StateError(
-        'আগের anonymous identity নেই। Support-এ যোগাযোগ করুন।',
-      );
+    for (final row in _rows(data['items'])) {
+      final productId = _intValue(row['product']);
+      grouped.putIfAbsent(productId, () => <_Row>[]).add(row);
     }
 
-    if (attempt['backend'] != 'firestore_v1') {
-      throw StateError(
-        'পুরোনো Functions order attempt আছে। '
-            'তার ফল যাচাই না করে মুছবেন না।',
+    return grouped.entries.map((entry) {
+      final first = entry.value.first;
+      final categoryId = _intValue(first['category_id']);
+      final image = _text(first['photo']);
+
+      final packs = entry.value.map((row) {
+        final regularPrice = row['regular_price'];
+        final unit = _text(row['label']);
+
+        return ShopVariant(
+          id: '${_intValue(row['pack'])}',
+          name: unit,
+          unit: unit,
+          image: image,
+          price: _moneyToMinor(row['price']),
+          originalPrice: regularPrice == null || '$regularPrice'.isEmpty
+              ? 0
+              : _moneyToMinor(regularPrice),
+          stock: _intValue(row['stock']),
+          enabled: true,
+        );
+      }).toList();
+
+      return ShopProduct(
+        id: 'mysql:${entry.key}',
+        name: _text(first['name']),
+        categoryId: '$categoryId',
+        categoryName: categories[categoryId] ?? 'অন্যান্য',
+        description: _text(first['description']),
+        images: image.isEmpty ? <String>[] : [image],
+        variants: packs,
+        base: packs.first,
+        featured: featuredIds.contains(entry.key),
       );
-    }
+    }).toList();
   }
 
-  Future<String?> abandon() =>
-      operation(() async {
-        final attempt = pending.value;
-
-        if (attempt == null) return null;
-
-        final uid = await identity();
-
-        _checkAttempt(attempt, uid);
-
-        final requestId = '${attempt['requestId']}';
-        final id = '${uid}_$requestId';
-        final ref = db.doc('orders/$id');
-
-        final existingId =
-        await db.runTransaction<String?>((tx) async {
-          final doc = await tx.get(ref);
-
-          if (doc.exists) {
-            return doc.data()?['status'] == 'abandoned'
-                ? null
-                : id;
-          }
-
-          tx.set(ref, {
-            'attemptOwner': uid,
-            'requestId': requestId,
-            'status': 'abandoned',
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-
-          return null;
-        });
-
-        await _commit({
-          'pending': null,
-          if (existingId != null) 'cart': [],
-        });
-
-        validation.clear();
-
-        return existingId;
-      });
-
-  Future<void> deleteAddress(int index) =>
-      operation(() async {
-        final next = addresses.toList()..removeAt(index);
-
-        await _commit({'addresses': next});
-      });
-
-  Future<void> toggleSaved(ShopProduct p) async {
-    await saved.toggle(
-      id: p.id,
-      product: true,
-      snapshot: {
-        'name': p.name,
-        'imageUrl': p.image,
-        'categoryId': p.categoryId,
-        'label': p.categoryName,
-        'priceMinor': p.preview.price,
-        'unit': p.preview.unit,
-        'inStock': p.available,
-      },
+  static Future<_Row> _fetchStore(int zone) async {
+    // আগের ServiceApi config ব্যবহার করে। এখানে নতুন IP দিতে হবে না।
+    final uri = ServiceApi.menuIcon(1).resolve('mobile.php').replace(
+      queryParameters: {'a': 'store', 'area': '$zone'},
     );
-  }
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> orders(
-      String uid, {
-        int limit = 30,
-      }) =>
-      db
-          .collection('orders')
-          .where('ownerUid', isEqualTo: uid)
-          .snapshots(includeMetadataChanges: true);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6);
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>> order(
-      String id,
-      ) =>
-      db.doc('orders/$id').snapshots(
-        includeMetadataChanges: true,
-      );
+    Future<_Row> send() async {
+      final request = await client.getUrl(uri);
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
 
-  Future<List<String>> reorder(
-      Map<String, dynamic> order,
-      ) =>
-      operation(() async {
-        await loadLocal();
-        _editable();
+      final response = await request.close();
 
-        final requests = _requests(
-          ((order['lines'] as List?) ?? []).map((x) {
-            final line = object(x);
-
-            return {
-              'productId': line['productId'],
-              'variantId': line['variantId'],
-              'qty': line['qty'],
-            };
-          }).toList(),
-        );
-
-        final checked = await db.runTransaction(
-              (tx) => _lines(tx, requests),
-        );
-
-        final valid = checked
-            .where((x) => x['valid'] == true)
-            .map(CartLine.fromMap)
-            .toList();
-
-        if (valid.isEmpty) {
-          throw StateError(
-            'এই order-এর পণ্য এখন নেওয়া যাচ্ছে না।',
-          );
-        }
-
-        await _commit({
-          'cart': valid.map((x) => x.toMap()).toList(),
-        });
-
-        validation.clear();
-
-        return checked
-            .where((x) => x['valid'] != true)
-            .map(
-              (x) => '${x['productId']}: ${x['message']}',
-        )
-            .toList();
-      });
-
-  Future<void> cancel(
-      String id,
-      String reason,
-      ) =>
-      operation(() async {
-        final uid = await identity();
-        final ref = db.doc('orders/$id');
-
-        await db.runTransaction<void>((tx) async {
-          final doc = await tx.get(ref);
-          final data = doc.data();
-
-          if (data == null || data['ownerUid'] != uid) {
-            throw StateError(
-              'নিজের order পাওয়া যায়নি।',
-            );
-          }
-
-          if (data['status'] == 'cancelled') return;
-
-          if (data['status'] != 'placed') {
-            throw StateError(
-              'Processing শুরু হয়েছে। Store-এ যোগাযোগ করুন।',
-            );
-          }
-
-          if (data['paymentStatus'] != 'unpaid') {
-            throw StateError(
-              'Payment যাচাইয়ের জন্য Support-এ যোগাযোগ করুন।',
-            );
-          }
-
-          final stockWrites =
-          data['inventoryVersion'] == 1
-              ? await _stockWrites(
-            tx,
-            (data['lines'] as List)
-                .map(object)
-                .toList(),
-            data['requestId'] as String,
-            1,
-          )
-              : <String, Map<String, dynamic>>{};
-
-          tx.update(ref, {
-            'status': 'cancelled',
-            'cancellationReason': _text(reason, 2, 300),
-            'cancelledAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-
-          for (final entry in stockWrites.entries) {
-            tx.update(
-              db.doc('products/${entry.key}'),
-              entry.value,
-            );
-          }
-        });
-      });
-
-  bool _publishedPolicies(
-      Map<String, dynamic>? data,
-      ) {
-    if (data == null ||
-        data['policiesPublished'] != true) {
-      return false;
-    }
-
-    bool text(String key) =>
-        data[key] is String &&
-            (data[key] as String).trim().isNotEmpty;
-
-    bool link(String key) {
-      final uri = Uri.tryParse('${data[key] ?? ''}');
-
-      return uri != null &&
-          uri.scheme == 'https' &&
-          uri.host.isNotEmpty &&
-          uri.userInfo.isEmpty;
-    }
-
-    return text('operatorName') &&
-        text('supportEmail') &&
-        text('policyVersion') &&
-        text('privacyText') &&
-        text('termsText') &&
-        text('deletionText') &&
-        link('privacyUrl') &&
-        link('deletionUrl');
-  }
-
-  Future<Map<String, Map<String, dynamic>>> _stockWrites(
-      Transaction tx,
-      List<Map<String, dynamic>> lines,
-      String requestId,
-      int direction,
-      ) async {
-    final result = <String, Map<String, dynamic>>{};
-
-    final ids = lines
-        .map((line) => line['productId'] as String)
-        .toSet();
-
-    for (final id in ids) {
-      final document = await tx.get(
-        db.doc('products/$id'),
-      );
-
-      final product = document.data();
-
-      if (product == null) {
+      if (response.statusCode != HttpStatus.ok) {
         throw StateError(
-          'পণ্যের তথ্য পাওয়া যায়নি। Support-এ যোগাযোগ করুন।',
+          'Store API: HTTP ${response.statusCode}। mobile.php দেখুন।',
         );
       }
 
-      result[id] = inventoryMutation(
-        product: product,
-        productId: id,
-        lines: lines,
-        requestId: requestId,
-        direction: direction,
-      );
-    }
+      final raw = await utf8.decoder.bind(response).join();
+      final dynamic data;
 
-    return result;
-  }
-
-  Future<void> issue({
-    required String orderId,
-    required String requestId,
-    required String type,
-    required String reason,
-    required String description,
-  }) =>
-      operation(() async {
-        final uid = await identity();
-
-        final data = {
-          'ownerUid': uid,
-          'orderId': orderId,
-          'requestId': requestId,
-          'type': type,
-          'reason': _text(reason, 2, 120),
-          'description': _text(description, 0, 2000),
-          'requestStatus': 'pending',
-          'refundStatus': 'not_requested',
-          'refundMinor': 0,
-        };
-
-        final ref = db.doc(
-          'orders/$orderId/issues/$requestId',
+      try {
+        data = jsonDecode(raw);
+      } on FormatException {
+        throw StateError(
+          'mobile.php থেকে JSON পাওয়া যায়নি। ব্রাউজারে Store API খুলে দেখুন।',
         );
-
-        await db.runTransaction<void>((tx) async {
-          final existing = await tx.get(ref);
-
-          if (existing.exists) {
-            for (final key in [
-              'ownerUid',
-              'orderId',
-              'requestId',
-              'type',
-              'reason',
-              'description',
-            ]) {
-              if (existing.data()?[key] != data[key]) {
-                throw StateError(
-                  'একই অনুরোধের তথ্য মেলেনি।',
-                );
-              }
-            }
-
-            return;
-          }
-
-          final order = (
-              await tx.get(db.doc('orders/$orderId'))
-          ).data();
-
-          if (order == null ||
-              order['ownerUid'] != uid) {
-            throw StateError(
-              'নিজের order পাওয়া যায়নি।',
-            );
-          }
-
-          if (!['issue', 'return'].contains(type)) {
-            throw StateError(
-              'অনুরোধের ধরন ঠিক করুন।',
-            );
-          }
-
-          if (type == 'return') {
-            final delivered = date(order['deliveredAt']);
-
-            if (order['status'] != 'delivered' ||
-                delivered == null ||
-                DateTime.now().isAfter(
-                  delivered.add(
-                    Duration(
-                      days: number(
-                        order['returnWindowDays'],
-                      ),
-                    ),
-                  ),
-                )) {
-              throw StateError(
-                'Return-এর সময়সীমা বা delivery শর্ত পূরণ হয়নি।',
-              );
-            }
-          }
-
-          tx.set(ref, {
-            ...data,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-        });
-      });
-
-  static String message(Object e) {
-    if (e is FirebaseException) {
-      if (e.code == 'operation-not-allowed') {
-        return 'Firebase Console-এ Anonymous Auth চালু করুন।';
       }
 
-      if (e.code == 'permission-denied') {
-        return 'Firestore Rules publish হয়েছে কি না দেখুন।';
+      if (data is! _Row || data['items'] is! List) {
+        throw StateError('Store API-এর উত্তরে items তালিকা নেই।');
       }
 
-      if (e.code == 'unavailable') {
-        return 'Internet বা Firestore সংযোগ পাওয়া যায়নি।';
-      }
-
-      return 'কাজটি হয়নি (${e.code})।';
+      return data;
     }
 
-    return e.toString().replaceFirst('Bad state: ', '');
+    try {
+      return await send().timeout(const Duration(seconds: 15));
+    } on SocketException {
+      throw StateError('Store API-তে পৌঁছানো যায়নি। XAMPP ও API ঠিকানা দেখুন।');
+    } on TimeoutException {
+      throw StateError('Store API সময়মতো উত্তর দেয়নি। আবার চেষ্টা করুন।');
+    } finally {
+      client.close(force: true);
+    }
   }
 
-  Future<void> settingsSaveAddress(
-      Map<String, dynamic> input, {
-        int? index,
-      }) =>
-      operation(() async {
-        await loadLocal();
-        _editable();
+  static String _text(dynamic value) =>
+      value is String ? value.trim() : '';
 
-        var phone = normalized(
-          _text(input['phone'], 11, 24),
-        ).replaceAll(RegExp(r'[\s()-]'), '');
+  static int _intValue(dynamic value) => int.parse('$value');
 
-        if (phone.startsWith('+88')) {
-          phone = phone.substring(3);
-        }
+  static List<_Row> _rows(dynamic value) {
+    if (value is! List || value.any((item) => item is! _Row)) {
+      throw const FormatException('Store API তালিকার format ঠিক নেই।');
+    }
+    return value.cast<_Row>();
+  }
 
-        if (!RegExp(r'^01[3-9]\d{8}$').hasMatch(phone)) {
-          throw StateError(
-            'সঠিক মোবাইল নম্বর দিন।',
-          );
-        }
+  // MySQL-এর "2000.00" টাকা → Flutter মডেলের 200000 পয়সা।
+  static int _moneyToMinor(dynamic value) {
+    final text = '$value'.trim();
 
-        final address = <String, dynamic>{
-          'name': _text(input['name'], 2, 80),
-          'phone': phone,
-          'zoneId': _text(input['zoneId'], 1, 128),
-          'zoneLabel': _text(input['zoneLabel'], 1, 100),
-          'zoneIndex': input['zoneIndex'] is int
-              ? input['zoneIndex']
-              : 0,
-          'address': _text(input['address'], 8, 400),
-          'landmark': _text(input['landmark'], 0, 160),
-          'note': _text(input['note'], 0, 300),
-        };
+    if (!RegExp(r'^\d+(?:\.\d{1,2})?$').hasMatch(text)) {
+      throw const FormatException('Store API-তে দামের format ঠিক নেই।');
+    }
 
-        final next = addresses
-            .map(
-              (item) => Map<String, dynamic>.from(item),
-        )
-            .toList();
+    final parts = text.split('.');
+    final taka = int.parse(parts.first);
+    final paisa = parts.length == 1
+        ? 0
+        : int.parse(parts.last.padRight(2, '0'));
 
-        if (index == null) {
-          if (next.length >= 5) {
-            throw StateError(
-              'সর্বোচ্চ ৫টি ঠিকানা। আগে একটি সরান।',
-            );
-          }
-
-          next.insert(0, address);
-        } else {
-          if (index < 0 || index >= next.length) {
-            throw StateError(
-              'তালিকা বদলেছে। আবার খুলুন।',
-            );
-          }
-
-          next[index] = address;
-        }
-
-        await _commit({'addresses': next});
-      });
-
-  Future<void> settingsEraseLocalDatabase() =>
-      operation(() async {
-        await loadLocal();
-        _editable();
-
-        final database = await _database();
-        final path = database.path;
-
-        await database.close();
-
-        _databaseTask = null;
-        _localTask = null;
-        localReady.value = false;
-
-        await deleteDatabase(path);
-
-        _state = {};
-        _apply(_state);
-
-        validation.clear();
-      });
+    return taka * 100 + paisa;
+  }
 }

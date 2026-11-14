@@ -11,218 +11,187 @@ import '../10_product_details/product_details_screen.dart';
 import '../11_cart/cart_screen.dart';
 import '../13_my_orders/my_orders_screen.dart';
 
-const _blue = Color(0xFF1959E8);
-const _ink = Color(0xFF10264A);
-const _muted = Color(0xFF69798E);
-const _line = Color(0xFFE5EBF4);
+const _blue = Color(0xFF2253DC);
+const _ink = Color(0xFF182743);
+const _muted = Color(0xFF586980);
+const _edge = Color(0xFFDFE6F1);
+const _bold = TextStyle(color: _ink, fontWeight: FontWeight.w800);
 
 class ShoppingHomeScreen extends StatefulWidget {
   const ShoppingHomeScreen({super.key});
 
   @override
-  State<ShoppingHomeScreen> createState() =>
-      _ShoppingHomeScreenState();
+  State<ShoppingHomeScreen> createState() => _StoreState();
 }
 
-class _ShoppingHomeScreenState
-    extends State<ShoppingHomeScreen> {
+class _StoreState extends State<ShoppingHomeScreen> {
   final shop = ShopService.instance;
   final search = TextEditingController();
 
-  Timer? _debounce;
-
-  String _query = '';
-  String _category = '';
-  String _sort = 'featured';
-
-  double _minPrice = 0;
-  double _maxPrice = double.infinity;
-
-  bool _availableOnly = false;
-  bool _refreshing = false;
-  bool _adding = false;
-
-  int _visible = 20;
-  String _startupError = '';
-
-  bool get _filtered =>
-      _availableOnly ||
-          _minPrice > 0 ||
-          _maxPrice.isFinite ||
-          _sort != 'featured';
+  String? category;
+  String query = '', sort = 'featured', loadError = '';
+  bool inStock = false, refreshing = false, adding = false;
+  double low = 0, high = double.infinity;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_refresh());
+    refresh();
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
     search.dispose();
     super.dispose();
   }
 
-  Future<void> _refresh() async {
-    if (_refreshing) return;
+  Future<void> refresh() async {
+    if (refreshing) return;
 
     setState(() {
-      _refreshing = true;
-      _startupError = '';
+      refreshing = true;
+      loadError = '';
     });
 
     try {
-      await Future.wait<void>([
+      await Future.wait([
         shop.loadLocal(),
         shop.saved.load(),
         shop.loadCatalog(),
       ]);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _startupError = ShopService.message(e);
-        });
-      }
+      if (mounted) setState(() => loadError = ShopService.message(e));
     } finally {
-      if (mounted) {
-        setState(() => _refreshing = false);
-      }
+      if (mounted) setState(() => refreshing = false);
     }
   }
 
-  void _update(VoidCallback action) {
-    if (!mounted) return;
+  void open(ShopProduct p) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Get.to(() => ProductDetailsScreen(productId: p.id));
+  }
 
+  void choose(String? id) {
     setState(() {
-      action();
-      _visible = 20;
+      category = id;
+      search.clear();
+      query = '';
+      low = 0;
+      high = double.infinity;
+      inStock = false;
     });
   }
 
-  void _searchChanged(String value) {
-    _debounce?.cancel();
-
-    _debounce = Timer(
-      const Duration(milliseconds: 250),
-          () => _update(() => _query = normalized(value)),
-    );
-  }
-
-  void _resetFilters() {
-    _availableOnly = false;
-    _minPrice = 0;
-    _maxPrice = double.infinity;
-    _sort = 'featured';
-  }
-
-  void _openProduct(ShopProduct product) {
+  Future<void> directory(
+      Map<String, String> names,
+      Map<String, String> parents,
+      Map<String, int> counts,
+      String? active,
+      ) async {
     FocusManager.instance.primaryFocus?.unfocus();
 
-    Get.to(
-          () => ProductDetailsScreen(productId: product.id),
+    // null = sheet বন্ধ; খালি string = সব পণ্য।
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.sizeOf(ctx).height * .68,
+        child: Column(
+          children: [
+            Text('সব ক্যাটাগরি', style: _bold.copyWith(fontSize: 20)),
+            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.apps_rounded),
+                    title: const Text('সব পণ্য দেখুন'),
+                    selected: active == null,
+                    onTap: () => Navigator.pop(ctx, ''),
+                  ),
+                  for (final e in names.entries)
+                    ListTile(
+                      leading: const Icon(Icons.folder_outlined),
+                      title: Text(e.value),
+                      subtitle: names[parents[e.key]] == null
+                          ? null
+                          : Text(names[parents[e.key]]!),
+                      trailing: Text('${counts[e.key] ?? 0}টি'),
+                      selected: e.key == active,
+                      onTap: () => Navigator.pop(ctx, e.key),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
+
+    if (mounted && result != null) {
+      choose(result.isEmpty ? null : result);
+    }
   }
 
-  Future<void> _filters() async {
+  Future<void> filters() async {
     FocusManager.instance.primaryFocus?.unfocus();
 
-    final maximum = shop.products
-        .fold<double>(
+    final maximum = shop.products.fold<double>(
       1,
-          (value, product) =>
-          math.max(value, product.preview.price / 100),
-    )
-        .ceilToDouble();
+          (n, p) => math.max(n, p.preview.price / 100),
+    ).ceilToDouble();
 
     var range = RangeValues(
-      _minPrice.clamp(0, maximum).toDouble(),
-      _maxPrice.isFinite
-          ? _maxPrice.clamp(0, maximum).toDouble()
-          : maximum,
+      low.clamp(0, maximum).toDouble(),
+      high.clamp(0, maximum).toDouble(),
     );
-
-    var only = _availableOnly;
-    var sort = _sort;
+    var stock = inStock;
+    var order = sort;
 
     final result = await shopSheet<String>(
       StatefulBuilder(
-        builder: (sheetContext, change) => Column(
+        builder: (ctx, change) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'আপনার মতো করে খুঁজুন',
-              style: TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 20),
+            const Text('পণ্য বাছাই', style: _bold),
+            const SizedBox(height: 12),
             Text(
-              'দামের সীমা: ${money((range.start * 100).round())}'
-                  ' — ${money((range.end * 100).round())}',
+              'দাম: ${money((range.start * 100).round())}'
+                  ' – ${money((range.end * 100).round())}',
             ),
             RangeSlider(
               values: range,
               max: maximum,
-              activeColor: _blue,
-              labels: RangeLabels(
-                money((range.start * 100).round()),
-                money((range.end * 100).round()),
-              ),
-              onChanged: (value) {
-                change(() => range = value);
-              },
+              onChanged: (v) => change(() => range = v),
             ),
-            SwitchListTile.adaptive(
+            SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('শুধু স্টকে থাকা পণ্য'),
-              value: only,
-              onChanged: (value) {
-                change(() => only = value);
-              },
+              value: stock,
+              onChanged: (v) => change(() => stock = v),
             ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: sort,
+            DropdownButton<String>(
               isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'সাজানোর নিয়ম',
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'featured',
-                  child: Text('নির্বাচিত পণ্য'),
-                ),
-                DropdownMenuItem(
-                  value: 'new',
-                  child: Text('নতুন পণ্য'),
-                ),
-                DropdownMenuItem(
-                  value: 'low',
-                  child: Text('দাম কম থেকে বেশি'),
-                ),
-                DropdownMenuItem(
-                  value: 'high',
-                  child: Text('দাম বেশি থেকে কম'),
-                ),
-              ],
-              onChanged: (value) {
-                change(() => sort = value ?? 'featured');
-              },
+              value: order,
+              items: const {
+                'featured': 'নির্বাচিত',
+                'new': 'নতুন আগে',
+                'low': 'কম দাম আগে',
+                'high': 'বেশি দাম আগে',
+              }.entries.map((e) {
+                return DropdownMenuItem(value: e.key, child: Text(e.value));
+              }).toList(),
+              onChanged: (v) => change(() => order = v ?? order),
             ),
-            const SizedBox(height: 24),
             FilledButton(
-              onPressed: () {
-                Navigator.of(sheetContext).pop('apply');
-              },
+              onPressed: () => Navigator.pop(ctx, 'apply'),
               child: const Text('ফলাফল দেখুন'),
             ),
             TextButton(
-              onPressed: () {
-                Navigator.of(sheetContext).pop('reset');
-              },
-              child: const Text('ফিল্টার রিসেট করুন'),
+              onPressed: () => Navigator.pop(ctx, 'clear'),
+              child: const Text('ফিল্টার সরান'),
             ),
           ],
         ),
@@ -230,129 +199,75 @@ class _ShoppingHomeScreenState
     );
 
     if (!mounted || result == null) return;
-
-    _update(() {
-      if (result == 'reset') {
-        _resetFilters();
-      } else {
-        _minPrice = range.start;
-        _maxPrice = range.end >= maximum
-            ? double.infinity
-            : range.end;
-        _availableOnly = only;
-        _sort = sort;
-      }
+    setState(() {
+      final clear = result == 'clear';
+      low = clear ? 0 : range.start;
+      high = clear || range.end == maximum ? double.infinity : range.end;
+      sort = clear ? 'featured' : order;
+      inStock = !clear && stock;
     });
   }
 
-  Future<void> _quickAdd(ShopProduct product) async {
-    if (_adding ||
+  Future<void> buy(ShopProduct p, ShopVariant pack) async {
+    if (adding) return;
+
+    if (p.choices.length > 1 ||
+        !p.available ||
+        !shop.localReady.value ||
         shop.busy.value ||
         shop.locked ||
-        !shop.localReady.value ||
         shop.config.value?.enabled != true) {
+      open(p);
       return;
     }
 
-    if (product.variants.isNotEmpty) {
-      _openProduct(product);
-      return;
-    }
-
-    _adding = true;
-
+    adding = true;
     try {
-      var already = 0;
+      final used = shop.cart
+          .where((l) => l.productId == p.id && l.variantId == pack.id)
+          .fold<int>(0, (n, l) => n + l.qty);
 
-      for (final line in shop.cart) {
-        if (line.productId == product.id &&
-            line.variantId.isEmpty) {
-          already += line.qty;
-        }
+      final maximum = math.min(99, pack.stock) - used;
+      if (maximum < 1) {
+        throw StateError('এই প্যাকের উপলব্ধ পরিমাণ ইতিমধ্যে কার্টে আছে।');
       }
 
-      final maximum =
-          math.min(product.base.stock, 99) - already;
-
-      if (maximum < 1 || !product.base.available) {
-        throw StateError(
-          'আরও যোগ করার মতো স্টক নেই।',
-        );
-      }
-
-      var quantity = 1;
-
-      final selected = await shopSheet<int>(
+      var qty = 1;
+      final count = await shopSheet<int>(
         StatefulBuilder(
-          builder: (sheetContext, change) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          builder: (ctx, change) => Column(
             children: [
-              Text(
-                product.name,
-                style: const TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.w800,
-                ),
+              Text(p.name, style: _bold),
+              Text('${pack.unit} · ${money(pack.price)}'),
+              const SizedBox(height: 12),
+              QuantityControl(
+                value: qty,
+                max: maximum,
+                onChanged: (n) => change(() => qty = n),
               ),
-              const SizedBox(height: 8),
-              Text(
-                '${product.base.unit} · '
-                    '${money(product.base.price)}',
-              ),
-              const SizedBox(height: 16),
-              Center(
-                child: QuantityControl(
-                  value: quantity,
-                  max: maximum,
-                  onChanged: (value) {
-                    change(() => quantity = value);
-                  },
-                ),
-              ),
-              const SizedBox(height: 16),
               FilledButton(
-                onPressed: () {
-                  Navigator.of(sheetContext).pop(quantity);
-                },
-                child: Text(
-                  'যোগ করুন · '
-                      '${money(quantity * product.base.price)}',
-                ),
+                onPressed: () => Navigator.pop(ctx, qty),
+                child: Text('কার্টে যোগ করুন · ${money(pack.price * qty)}'),
               ),
             ],
           ),
         ),
       );
 
-      if (!mounted || selected == null) return;
-
+      if (!mounted || count == null) return;
       if (shop.config.value?.enabled != true) {
-        throw StateError(
-          'বর্তমানে অর্ডার নেওয়া বন্ধ আছে।',
-        );
+        throw StateError('বর্তমানে অর্ডার নেওয়া বন্ধ।');
       }
 
-      await shop.add(product, product.base, selected);
-
-      if (!mounted) return;
-
-      Get.snackbar(
-        'কার্টে যোগ হয়েছে',
-        product.name,
-        snackPosition: SnackPosition.BOTTOM,
-        backgroundColor: Colors.white,
-        colorText: _ink,
-        mainButton: TextButton(
-          onPressed: () {
-            Get.to(() => const CartScreen());
-          },
-          child: const Text('কার্ট দেখুন'),
-        ),
-      );
+      await shop.add(p, pack, count);
+      if (mounted) {
+        Get.snackbar('কার্টে যোগ হয়েছে', p.name,
+            snackPosition: SnackPosition.BOTTOM);
+      }
     } catch (e) {
       if (mounted) shopError(e);
     } finally {
-      _adding = false;
+      adding = false;
     }
   }
 
@@ -364,374 +279,318 @@ class _ShoppingHomeScreenState
         IconButton(
           tooltip: 'আমার অর্ডার',
           icon: const Icon(Icons.receipt_long_outlined),
-          onPressed: () {
-            Get.to(() => const MyOrdersScreen());
-          },
+          onPressed: () => Get.to(() => const MyOrdersScreen()),
         ),
-        Obx(
-              () => Badge(
+        Obx(() => IconButton(
+          tooltip: 'কার্ট',
+          onPressed: () => Get.to(() => const CartScreen()),
+          icon: Badge(
             isLabelVisible: shop.units > 0,
-            label: Text(
-              shop.units > 99 ? '99+' : '${shop.units}',
-            ),
-            child: IconButton(
-              tooltip: 'কার্ট',
-              icon: const Icon(Icons.shopping_bag_outlined),
-              onPressed: () {
-                Get.to(() => const CartScreen());
-              },
-            ),
+            label: Text('${shop.units}'),
+            child: const Icon(Icons.shopping_bag_outlined),
           ),
-        ),
-        const SizedBox(width: 14),
+        )),
       ],
       body: Obx(() {
-        final products = shop.products.toList();
-        final loading = shop.loading.value || _refreshing;
+        final all = shop.products.toList();
+        final cfg = shop.config.value;
 
-        final error = shop.error.value.isNotEmpty
-            ? shop.error.value
-            : _startupError;
+        List<Map<String, dynamic>> meta(String key) =>
+            ((cfg?.raw[key] as List?) ?? const []).map(object).toList();
 
-        final categories = <String, String>{
-          for (final p in products)
-            p.categoryId: p.categoryName,
-        };
+        final names = <String, String>{};
+        final parents = <String, String>{};
+        final photos = <String, String>{};
+        final counts = <String, int>{};
+        final paths = <String, Set<String>>{};
 
-        // Calculate the preview variant once per filtering pass.
-        final rows = products
-            .map((p) => (product: p, variant: p.preview))
-            .where((row) {
-          final p = row.product;
-          final price = row.variant.price / 100;
+        for (final c in meta('categories')) {
+          final id = '${c['id']}';
+          names[id] = '${c['name']}';
+          parents[id] = '${c['parent_id'] ?? ''}';
+        }
 
-          return (_category.isEmpty ||
-              p.categoryId == _category) &&
-              (_query.isEmpty ||
-                  normalized(
-                    '${p.name} ${p.categoryName} '
-                        '${p.description}',
-                  ).contains(_query)) &&
-              (!_availableOnly || p.available) &&
-              price >= _minPrice &&
-              price <= _maxPrice;
+        Set<String> lineage(String id) {
+          final keys = <String>{};
+          while (id.isNotEmpty && keys.add(id)) {
+            id = parents[id] ?? '';
+          }
+          return keys;
+        }
+
+        for (final p in all) {
+          names.putIfAbsent(p.categoryId, () => p.categoryName);
+          final path = paths.putIfAbsent(
+            p.categoryId,
+                () => lineage(p.categoryId),
+          );
+          for (final id in path) {
+            counts[id] = (counts[id] ?? 0) + 1;
+            if (p.image.isNotEmpty) photos.putIfAbsent(id, () => p.image);
+          }
+        }
+
+        final active = names.containsKey(category) ? category : null;
+
+        void showCategories() {
+          directory(names, parents, counts, active);
+        }
+
+        // অ্যাডমিনের প্রকাশিত তাকগুলো প্রথম পছন্দ।
+        final slides = <_Slide>[];
+        final byId = {for (final p in all) p.id.split(':').last: p};
+        final links = meta('shelfItems');
+
+        for (final shelf in meta('shelves')) {
+          final linked = links
+              .where((x) => '${x['shelf_id']}' == '${shelf['id']}')
+              .map((x) => byId['${x['product_id']}'])
+              .whereType<ShopProduct>()
+              .toList();
+
+          final title = '${shelf['title'] ?? 'নির্বাচিত পণ্য'}';
+          final banner = '${shelf['banner'] ?? ''}'.trim();
+          final uri = Uri.tryParse(banner);
+          final isPhoto = uri != null &&
+              uri.hasAuthority &&
+              ['https', 'http'].contains(uri.scheme);
+
+          slides.add(_Slide(
+            'দোকানের তাক',
+            title,
+            isPhoto || banner.isEmpty ? 'তাক দেখুন' : banner,
+            isPhoto ? banner : linked.isEmpty ? '' : linked.first.image,
+                () {
+              shopSheet<void>(
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(title, style: _bold),
+                    if (linked.isEmpty)
+                      const Text('এই এলাকায় এই তাকে কোনো পণ্য নেই।'),
+                    for (final p in linked)
+                      ListTile(
+                        title: Text(p.name),
+                        trailing: Text(money(p.preview.price)),
+                        onTap: () {
+                          Get.back();
+                          open(p);
+                        },
+                      ),
+                  ],
+                ),
+              );
+            },
+          ));
+        }
+
+        if (slides.isEmpty) {
+          for (final p in all.take(4)) {
+            slides.add(_Slide(
+              'পণ্যের সংগ্রহ', p.name, money(p.preview.price),
+              p.image, () => open(p),
+            ));
+          }
+          slides.add(_Slide(
+            'HELLO STORE', 'ক্যাটাগরি ধরে কেনাকাটা',
+            'সব ক্যাটাগরি দেখুন', '', showCategories,
+          ));
+        }
+
+        final rows = [for (final p in all) (p: p, v: p.preview)]
+            .where((r) {
+          final price = r.v.price / 100;
+          return (active == null ||
+              paths[r.p.categoryId]?.contains(active) == true) &&
+              (!inStock || r.p.available) &&
+              price >= low &&
+              price <= high &&
+              normalized('${r.p.name} ${r.p.categoryName} ${r.p.description}')
+                  .contains(query);
         }).toList();
 
-        rows.sort((a, b) {
-          final result = switch (_sort) {
-            'low' =>
-                a.variant.price.compareTo(b.variant.price),
-            'high' =>
-                b.variant.price.compareTo(a.variant.price),
-            'new' =>
-                (b.product.createdAt ?? DateTime(1970)).compareTo(
-                  a.product.createdAt ?? DateTime(1970),
-                ),
-            _ => (b.product.featured ? 1 : 0).compareTo(
-              a.product.featured ? 1 : 0,
-            ),
-          };
+        int sequence(ShopProduct p) =>
+            int.tryParse(p.id.split(':').last) ?? 0;
 
-          return result == 0
-              ? a.product.id.compareTo(b.product.id)
-              : result;
+        rows.sort((a, b) {
+          final n = switch (sort) {
+            'low' => a.v.price.compareTo(b.v.price),
+            'high' => b.v.price.compareTo(a.v.price),
+            'new' => (b.p.createdAt?.millisecondsSinceEpoch ?? sequence(b.p))
+                .compareTo(a.p.createdAt?.millisecondsSinceEpoch ?? sequence(a.p)),
+            _ => (b.p.featured ? 1 : 0).compareTo(a.p.featured ? 1 : 0),
+          };
+          return n == 0 ? a.p.name.compareTo(b.p.name) : n;
         });
 
+        final loading = shop.loading.value || refreshing;
+        final error = shop.error.value.isEmpty ? loadError : shop.error.value;
+        final ordering = cfg?.enabled == true;
+        final cartReady =
+            shop.localReady.value && !shop.busy.value && !shop.locked;
+        final keys = <String?>[null, ...names.keys];
+        final filtered =
+            low > 0 || high.isFinite || inStock || sort != 'featured';
+
         return RefreshIndicator(
-          onRefresh: _refresh,
-          color: _blue,
+          onRefresh: refresh,
           child: CustomScrollView(
-            key: const PageStorageKey('hello-store-scroll'),
             physics: const AlwaysScrollableScrollPhysics(),
-            keyboardDismissBehavior:
-            ScrollViewKeyboardDismissBehavior.onDrag,
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             slivers: [
               SliverPadding(
-                padding:
-                const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
                 sliver: SliverToBoxAdapter(
                   child: Column(
-                    crossAxisAlignment:
-                    CrossAxisAlignment.stretch,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       TextField(
                         controller: search,
-                        onChanged: _searchChanged,
+                        onChanged: (s) => setState(() => query = normalized(s)),
                         textInputAction: TextInputAction.search,
-                        onSubmitted: (value) {
-                          _debounce?.cancel();
-                          _update(
-                                () => _query = normalized(value),
-                          );
-                          FocusManager.instance.primaryFocus
-                              ?.unfocus();
-                        },
                         decoration: InputDecoration(
+                          isDense: true,
                           hintText: 'কোন পণ্যটি খুঁজছেন?',
-                          prefixIcon: const Icon(
-                            Icons.search_rounded,
-                            color: _blue,
-                          ),
-                          suffixIcon: IconButton(
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: search.text.isEmpty ? null : IconButton(
                             tooltip: 'খোঁজা মুছুন',
-                            icon: const Icon(
-                              Icons.close_rounded,
-                            ),
-                            onPressed: () {
-                              _debounce?.cancel();
+                            icon: const Icon(Icons.close),
+                            onPressed: () => setState(() {
                               search.clear();
-                              _update(() => _query = '');
-                            },
+                              query = '';
+                            }),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 18),
-
-                      _StoreHero(shop: shop),
-
-                      const SizedBox(height: 12),
-                      const Text(
-                        'কোম্পানির নিজস্ব স্টোর • '
-                            'স্থানীয় দোকানের তালিকা মেনুতে',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: _muted,
-                          fontSize: 12,
-                          height: 1.5,
+                      const SizedBox(height: 10),
+                      _Carousel(
+                        key: ValueKey(Object.hashAll(slides.map((s) => s.title))),
+                        slides: slides,
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () => policies(cfg),
+                          icon: const Icon(Icons.local_shipping_outlined, size: 16),
+                          label: const Text('ডেলিভারি ও ফেরত'),
                         ),
                       ),
-                      const SizedBox(height: 12),
-
-                      _StoreStatus(shop: shop),
-
-                      const SizedBox(height: 12),
+                      if (cfg != null && !ordering)
+                        const Text(
+                          'এখনও কোনো ডেলিভারি ইউনিয়ন চালু নেই।',
+                          style: TextStyle(color: _muted),
+                        ),
+                      if (shop.localError.value.isNotEmpty)
+                        Text(shop.localError.value),
+                      if (shop.locked)
+                        TextButton(
+                          onPressed: () => Get.to(() => const CartScreen()),
+                          child: const Text('আগের অর্ডারের অবস্থা দেখুন'),
+                        ),
+                      const SizedBox(height: 10),
+                      const Text('ক্যাটাগরি', style: _bold),
+                      const SizedBox(height: 8),
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
                           children: [
-                            for (final entry in {
-                              '': 'সব পণ্য',
-                              ...categories,
-                            }.entries)
-                              Padding(
-                                padding: const EdgeInsets.only(
-                                  right: 8,
-                                ),
-                                child: ChoiceChip(
-                                  label: Text(
-                                    entry.value.isEmpty
-                                        ? 'অন্যান্য'
-                                        : entry.value,
-                                  ),
-                                  selected:
-                                  _category == entry.key,
-                                  showCheckmark: false,
-                                  selectedColor: _blue,
-                                  labelStyle: TextStyle(
-                                    color: _category == entry.key
-                                        ? Colors.white
-                                        : _ink,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  onSelected: (_) {
-                                    _update(
-                                          () => _category = entry.key,
-                                    );
-                                  },
-                                ),
+                            for (final id in keys)
+                              _Category(
+                                title: id == null ? 'সব পণ্য' : names[id]!,
+                                photo: photos[id] ?? '',
+                                all: id == null,
+                                selected: id == active,
+                                tap: id == null ? showCategories : () => choose(id),
                               ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
                             child: Text(
-                              loading && products.isEmpty
-                                  ? 'পণ্য আনা হচ্ছে…'
-                                  : '${rows.length}টি পণ্য',
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                              ),
+                              active == null ? 'পণ্যের সংগ্রহ' : names[active]!,
+                              style: _bold.copyWith(fontSize: 19),
                             ),
                           ),
-                          IconButton.filledTonal(
-                            tooltip: 'দাম ও স্টক ফিল্টার',
-                            onPressed: _filters,
-                            icon: Icon(
-                              _filtered
-                                  ? Icons.filter_alt
-                                  : Icons.tune_rounded,
-                            ),
+                          Text('${rows.length}টি',
+                              style: const TextStyle(color: _muted)),
+                          IconButton(
+                            tooltip: 'দাম, স্টক ও সাজানো',
+                            onPressed: filters,
+                            icon: Icon(Icons.tune_rounded,
+                                color: filtered ? _blue : _muted),
                           ),
                         ],
                       ),
-
-                      if (_filtered)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: () {
-                              _update(_resetFilters);
-                            },
-                            icon: const Icon(
-                              Icons.close,
-                              size: 16,
-                            ),
-                            label: const Text('ফিল্টার সরান'),
-                          ),
-                        ),
-
-                      if (loading)
-                        const LinearProgressIndicator(
-                          minHeight: 2,
-                        ),
-
+                      if (loading) const LinearProgressIndicator(minHeight: 2),
                       if (error.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        _Notice(
-                          text: error,
-                          warning: true,
-                        ),
+                        Text(error),
                         TextButton(
-                          onPressed: loading ? null : _refresh,
+                          onPressed: loading ? null : refresh,
                           child: const Text('আবার চেষ্টা করুন'),
                         ),
                       ],
+                      if (!loading && error.isEmpty && rows.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Column(children: [
+                            Text(active != null
+                                ? 'এই বাছাইয়ে কোনো পণ্য নেই।'
+                                : 'কোনো পণ্য পাওয়া যায়নি।'),
+                            TextButton(
+                              onPressed: showCategories,
+                              child: const Text('সব ক্যাটাগরি দেখুন'),
+                            ),
+                          ]),
+                        ),
                     ],
                   ),
                 ),
               ),
-
-              if (rows.isEmpty && !loading)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      children: [
-                        const Icon(
-                          Icons.search_off_rounded,
-                          size: 48,
-                          color: _muted,
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          error.isEmpty
-                              ? 'পণ্য পাওয়া যায়নি। '
-                              'খোঁজা বা ফিল্টার বদলান।'
-                              : 'তালিকা আনা যায়নি। '
-                              'সংযোগ হলে আবার চেষ্টা করুন।',
-                          textAlign: TextAlign.center,
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            _debounce?.cancel();
-                            search.clear();
-
-                            _update(() {
-                              _query = '';
-                              _category = '';
-                              _resetFilters();
-                            });
-                          },
-                          child: const Text('সব পণ্য দেখুন'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-              // Rows build lazily. Cards have natural height,
-              // so larger text does not rely on a fixed grid height.
               SliverPadding(
-                padding:
-                const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 20),
                 sliver: SliverLayoutBuilder(
-                  builder: (context, constraints) {
+                  builder: (ctx, constraints) {
+                    final width = constraints.crossAxisExtent;
                     final largeText =
-                        MediaQuery.textScalerOf(context)
-                            .scale(14) >
-                            19;
-
-                    final columns = largeText
-                        ? 1
-                        : (constraints.crossAxisExtent / 170)
-                        .floor()
-                        .clamp(1, 4)
-                        .toInt();
-
-                    final count =
-                    math.min(_visible, rows.length);
+                        MediaQuery.textScalerOf(ctx).scale(14) > 20;
+                    final cols = largeText || width < 272 ? 1
+                        : width >= 840 ? 4 : width >= 580 ? 3 : 2;
 
                     return SliverList(
                       delegate: SliverChildBuilderDelegate(
-                            (_, rowIndex) => Padding(
-                          padding: const EdgeInsets.only(
-                            bottom: 12,
-                          ),
+                            (ctx, row) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
                           child: Row(
-                            crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              for (var column = 0;
-                              column < columns;
-                              column++) ...[
-                                if (column > 0)
-                                  const SizedBox(width: 12),
+                              for (var col = 0; col < cols; col++) ...[
+                                if (col > 0) const SizedBox(width: 10),
                                 Expanded(
-                                  child: rowIndex * columns +
-                                      column >=
-                                      count
-                                      ? const SizedBox.shrink()
-                                      : _ProductCard(
-                                    product: rows[
-                                    rowIndex *
-                                        columns +
-                                        column]
-                                        .product,
-                                    variant: rows[
-                                    rowIndex *
-                                        columns +
-                                        column]
-                                        .variant,
-                                    shop: shop,
-                                    open: _openProduct,
-                                    add: _quickAdd,
-                                  ),
+                                  child: Builder(builder: (_) {
+                                    final i = row * cols + col;
+                                    if (i >= rows.length) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final r = rows[i];
+                                    return _Tile(
+                                      p: r.p, v: r.v, shop: shop,
+                                      ready: ordering && cartReady && r.p.available,
+                                      open: () => open(r.p),
+                                      buy: () => buy(r.p, r.v),
+                                    );
+                                  }),
                                 ),
                               ],
                             ],
                           ),
                         ),
-                        childCount: (count / columns).ceil(),
+                        childCount: (rows.length / cols).ceil(),
                       ),
                     );
                   },
                 ),
-              ),
-
-              if (_visible < rows.length)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                    ),
-                    child: OutlinedButton(
-                      onPressed: () {
-                        setState(() => _visible += 20);
-                      },
-                      child: Text(
-                        'আরও পণ্য দেখুন '
-                            '(${rows.length - _visible})',
-                      ),
-                    ),
-                  ),
-                ),
-
-              const SliverToBoxAdapter(
-                child: SizedBox(height: 24),
               ),
             ],
           ),
@@ -741,411 +600,344 @@ class _ShoppingHomeScreenState
   }
 }
 
-class _StoreHero extends StatelessWidget {
-  const _StoreHero({required this.shop});
+class _Slide {
+  const _Slide(this.tag, this.title, this.caption, this.photo, this.tap);
+  final String tag, title, caption, photo;
+  final VoidCallback tap;
+}
 
-  final ShopService shop;
+class _Carousel extends StatefulWidget {
+  const _Carousel({super.key, required this.slides});
+  final List<_Slide> slides;
 
   @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final raw = shop.config.value?.raw;
+  State<_Carousel> createState() => _CarouselState();
+}
 
-      final title =
-      '${raw?['bannerTitle'] ?? ''}'.trim();
+class _CarouselState extends State<_Carousel> {
+  final pages = PageController();
+  Timer? timer;
+  int index = 0;
+  bool touching = false;
 
-      final subtitle =
-      '${raw?['bannerSubtitle'] ?? ''}'.trim();
+  @override
+  void initState() {
+    super.initState();
+    timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted ||
+          touching ||
+          !pages.hasClients ||
+          widget.slides.length < 2 ||
+          !TickerMode.of(context) ||
+          MediaQuery.disableAnimationsOf(context) ||
+          ModalRoute.of(context)?.isCurrent == false ||
+          pages.position.isScrollingNotifier.value) {
+        return;
+      }
 
-      final demo = raw?['demoMode'] == true;
-
-      return Container(
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(26),
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF11388F),
-              _blue,
-              Color(0xFF227EDB),
-            ],
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(
-                  Icons.shopping_basket_outlined,
-                  color: Color(0xFFFFD882),
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'SMART DIMLA • HELLO STORE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Text(
-              title.isEmpty ||
-                  title == 'পরীক্ষামূলক কেনাকাটা'
-                  ? 'নিত্যদিনের কেনাকাটা,\nআরও সহজ।'
-                  : title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                height: 1.35,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              demo || subtitle.isEmpty
-                  ? 'পছন্দের পণ্য খুঁজুন, বেছে নিন, '
-                  'কার্টে রাখুন।'
-                  : subtitle,
-              style: const TextStyle(
-                color: Color(0xFFDCE9FF),
-                height: 1.6,
-              ),
-            ),
-            const SizedBox(height: 18),
-            TextButton.icon(
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                backgroundColor: const Color(0x22FFFFFF),
-              ),
-              onPressed: () => policies(shop.config.value),
-              icon: const Icon(
-                Icons.local_shipping_outlined,
-                size: 19,
-              ),
-              label: const Text('ডেলিভারি ও ফেরতের নিয়ম'),
-            ),
-          ],
-        ),
+      pages.animateToPage(
+        (index + 1) % widget.slides.length,
+        duration: const Duration(milliseconds: 380),
+        curve: Curves.easeOut,
       );
     });
   }
-}
-
-class _StoreStatus extends StatelessWidget {
-  const _StoreStatus({required this.shop});
-
-  final ShopService shop;
 
   @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final config = shop.config.value;
-
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (config?.raw['demoMode'] == true)
-
-          if (config != null && !config.enabled)
-            const _Notice(
-              text: 'বর্তমানে নতুন অর্ডার নেওয়া বন্ধ আছে।',
-              warning: true,
-            ),
-
-          if (shop.localError.value.isNotEmpty)
-            _Notice(
-              text: shop.localError.value,
-              warning: true,
-            ),
-
-          if (shop.locked)
-            TextButton.icon(
-              onPressed: () {
-                Get.to(() => const CartScreen());
-              },
-              icon: const Icon(Icons.info_outline),
-              label: const Text(
-                'আগের অর্ডারের ফল কার্ট থেকে যাচাই করুন',
-              ),
-            ),
-        ],
-      );
-    });
+  void dispose() {
+    timer?.cancel();
+    pages.dispose();
+    super.dispose();
   }
-}
-
-class _ProductCard extends StatelessWidget {
-  const _ProductCard({
-    required this.product,
-    required this.variant,
-    required this.shop,
-    required this.open,
-    required this.add,
-  });
-
-  final ShopProduct product;
-  final ShopVariant variant;
-  final ShopService shop;
-
-  final void Function(ShopProduct) open;
-  final Future<void> Function(ShopProduct) add;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: const BorderSide(color: _line),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Stack(
-            children: [
-              InkWell(
-                onTap: () => open(product),
-                child: Semantics(
-                  label: '${product.name}, বিস্তারিত দেখুন',
-                  button: true,
-                  child: AspectRatio(
-                    aspectRatio: 1.2,
-                    child: _ProductImage(
-                      url: product.image,
-                    ),
-                  ),
-                ),
-              ),
+    final tall = MediaQuery.textScalerOf(context).scale(14) > 19;
 
-              Positioned(
-                top: 4,
-                right: 4,
-                child: Obx(() {
-                  final saved =
-                  shop.saved.productIds.contains(
-                    product.id,
-                  );
-
-                  return IconButton.filledTonal(
-                    tooltip: saved ? 'সেভ সরান' : 'সেভ করুন',
-                    style: IconButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: _blue,
+    return Column(
+      children: [
+        SizedBox(
+          height: tall ? 160 : 108,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Listener(
+              onPointerDown: (_) => touching = true,
+              onPointerUp: (_) => touching = false,
+              onPointerCancel: (_) => touching = false,
+              child: PageView.builder(
+                controller: pages,
+                itemCount: widget.slides.length,
+                onPageChanged: (v) => setState(() => index = v),
+                itemBuilder: (_, i) {
+                  final s = widget.slides[i];
+                  const colors = [
+                    Color(0xFF143C60),
+                    Color(0xFF174F45),
+                    Color(0xFF503753),
+                  ];
+                  return Material(
+                    color: colors[i % colors.length],
+                    child: InkWell(
+                      onTap: s.tap,
+                      child: Row(children: [
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  s.tag, maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 10, letterSpacing: 1,
+                                  ),
+                                ),
+                                Text(
+                                  s.title, maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: _bold.copyWith(
+                                      color: Colors.white, fontSize: 20),
+                                ),
+                                Text(
+                                  s.caption, maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 94,
+                          child: s.photo.isEmpty
+                              ? const Icon(Icons.storefront_outlined,
+                              color: Colors.white, size: 38)
+                              : _Photo(s.photo),
+                        ),
+                      ]),
                     ),
-                    onPressed: shop.saved.ready.value
-                        ? () => guarded(
-                          () => shop.toggleSaved(product),
-                    )
-                        : null,
-                    icon: Icon(
-                      saved
-                          ? Icons.bookmark
-                          : Icons.bookmark_border,
-                    ),
                   );
-                }),
+                },
               ),
-            ],
+            ),
           ),
-
+        ),
+        if (widget.slides.length > 1)
           Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  product.categoryName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _muted,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                InkWell(
-                  onTap: () => open(product),
-                  child: Text(
-                    product.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _ink,
-                      fontSize: 16,
-                      height: 1.4,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  variant.unit,
-                  style: const TextStyle(
-                    color: _muted,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '${product.variants.isNotEmpty ? 'থেকে ' : ''}'
-                      '${money(variant.price)}',
-                  style: const TextStyle(
-                    color: _blue,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-
-                if (variant.originalPrice > variant.price)
-                  Text(
-                    money(variant.originalPrice),
-                    style: const TextStyle(
-                      color: _muted,
-                      decoration: TextDecoration.lineThrough,
-                      fontSize: 12,
-                    ),
-                  ),
-
-                const SizedBox(height: 6),
-                Text(
-                  product.available
-                      ? 'স্টকে আছে'
-                      : 'স্টক শেষ',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: product.available
-                        ? const Color(0xFF167351)
-                        : Colors.red.shade700,
-                  ),
-                ),
-                const SizedBox(height: 10),
-
-                Obx(() {
-                  final ready = shop.localReady.value;
-                  final busy = shop.busy.value;
-                  final locked = shop.locked;
-                  final enabled =
-                      shop.config.value?.enabled == true;
-
-                  return FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _blue,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 12,
-                      ),
-                    ),
-                    onPressed: product.available &&
-                        ready &&
-                        !busy &&
-                        !locked &&
-                        enabled
-                        ? () => add(product)
-                        : null,
-                    child: Text(
-                      product.variants.isEmpty
-                          ? 'কার্টে যোগ করুন'
-                          : 'ধরন বাছুন',
-                      textAlign: TextAlign.center,
-                    ),
-                  );
-                }),
-              ],
+            padding: const EdgeInsets.only(top: 5),
+            child: Text(
+              '${index + 1} / ${widget.slides.length}',
+              style: const TextStyle(color: _muted, fontSize: 11),
             ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }
 
-class _ProductImage extends StatelessWidget {
-  const _ProductImage({required this.url});
+class _Category extends StatelessWidget {
+  const _Category({
+    required this.title, required this.photo, required this.all,
+    required this.selected, required this.tap,
+  });
 
+  final String title, photo;
+  final bool all, selected;
+  final VoidCallback tap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    selected: selected,
+    button: true,
+    child: InkWell(
+      onTap: tap,
+      borderRadius: BorderRadius.circular(14),
+      child: SizedBox(
+        width: 76,
+        child: Column(children: [
+          Container(
+            width: 52, height: 52,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle, color: Colors.white,
+              border: Border.all(
+                color: selected ? _blue : _edge,
+                width: selected ? 2 : 1,
+              ),
+            ),
+            child: ClipOval(
+              child: all
+                  ? const ColoredBox(
+                color: Color(0xFFEAF0FF),
+                child: Icon(Icons.grid_view_rounded,
+                    color: _blue, size: 21),
+              )
+                  : _Photo(photo),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            title.isEmpty ? 'অন্যান্য' : title,
+            textAlign: TextAlign.center, maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+              color: selected ? _blue : _ink,
+            ),
+          ),
+        ]),
+      ),
+    ),
+  );
+}
+
+class _Photo extends StatelessWidget {
+  const _Photo(this.url);
   final String url;
 
   @override
   Widget build(BuildContext context) {
     const fallback = ColoredBox(
-      color: Color(0xFFF1F5FC),
-      child: Center(
-        child: Icon(
-          Icons.shopping_bag_outlined,
-          size: 40,
-          color: _blue,
-        ),
-      ),
+      color: Color(0xFFEDF1F7),
+      child: Center(child: Icon(Icons.shopping_bag_outlined, color: _muted)),
     );
 
-    if (Uri.tryParse(url)?.scheme != 'https') {
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasAuthority ||
+        !['https', 'http'].contains(uri.scheme)) {
       return fallback;
     }
 
     return Image.network(
-      url,
-      fit: BoxFit.contain,
-      cacheWidth: 480,
-      filterQuality: FilterQuality.low,
-      frameBuilder: (_, child, frame, synchronous) {
-        return synchronous || frame != null
-            ? child
-            : fallback;
-      },
-      errorBuilder: (_, error, stack) => fallback,
+      url, width: double.infinity, height: double.infinity,
+      fit: BoxFit.cover, cacheWidth: 520,
+      errorBuilder: (_, __, ___) => fallback,
     );
   }
 }
 
-class _Notice extends StatelessWidget {
-  const _Notice({
-    required this.text,
-    this.warning = false,
+class _Tile extends StatelessWidget {
+  const _Tile({
+    required this.p, required this.v, required this.ready,
+    required this.open, required this.buy, required this.shop,
   });
 
-  final String text;
-  final bool warning;
+  final ShopProduct p;
+  final ShopVariant v;
+  final bool ready;
+  final VoidCallback open, buy;
+  final ShopService shop;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: warning
-            ? const Color(0xFFFFF4DE)
-            : const Color(0xFFEAF1FF),
-        borderRadius: BorderRadius.circular(14),
+    final sale = v.originalPrice > v.price && v.price > 0;
+    final percent = sale
+        ? ((v.originalPrice - v.price) * 100 / v.originalPrice).floor()
+        : 0;
+
+    return Material(
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: _edge),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(
-            Icons.info_outline,
-            size: 18,
-            color: warning
-                ? const Color(0xFF9A6500)
-                : _blue,
+          AspectRatio(
+            aspectRatio: 1.25,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GestureDetector(onTap: open, child: _Photo(p.image)),
+                if (percent > 0)
+                  Positioned(
+                    top: 8, left: 8,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF9B3416),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        child: Text('−$percent%',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 11,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  top: 2, right: 2,
+                  child: Obx(() {
+                    final saved = shop.saved.productIds.contains(p.id);
+                    return IconButton(
+                      tooltip: saved ? 'সেভ সরান' : 'সেভ করুন',
+                      onPressed: shop.saved.ready.value
+                          ? () => guarded(() => shop.toggleSaved(p))
+                          : null,
+                      icon: CircleAvatar(
+                        radius: 15, backgroundColor: Colors.white,
+                        child: Icon(
+                          saved ? Icons.favorite : Icons.favorite_border,
+                          color: saved ? Colors.deepOrange : _ink, size: 17,
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: _ink,
-                fontSize: 13,
-                height: 1.5,
+          InkWell(
+            onTap: open,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      style: _bold.copyWith(fontSize: 15)),
+                  Text(
+                    '${v.unit} · ${p.available ? 'স্টকে আছে' : 'স্টক শেষ'}',
+                    maxLines: 2, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _muted, fontSize: 11),
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(money(v.price), style: _bold.copyWith(fontSize: 17)),
+                      if (sale)
+                        Text(
+                          money(v.originalPrice),
+                          semanticsLabel: 'আগের দাম ${money(v.originalPrice)}',
+                          style: const TextStyle(
+                            color: _muted, fontSize: 13,
+                            decoration: TextDecoration.lineThrough,
+                            decorationThickness: 2,
+                            decorationColor: _muted,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
               ),
             ),
+          ),
+          TextButton(
+            onPressed: ready ? buy : open,
+            child: Text(!ready
+                ? 'বিস্তারিত দেখুন'
+                : p.choices.length > 1 ? 'প্যাক বাছুন' : 'কার্টে যোগ করুন'),
           ),
         ],
       ),

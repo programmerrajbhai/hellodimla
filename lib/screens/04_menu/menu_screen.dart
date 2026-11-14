@@ -1,12 +1,10 @@
-import 'dart:convert';
-import 'dart:typed_data';
+// Smart Dimla: MySQL directory
+import 'dart:async';
 import 'package:flutter/material.dart' hide MenuController;
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../../core/network/service_api.dart';
 import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/community_service.dart';
-import '../../data/models/public_service_phone.dart';
 import '../02_home/sheets/home_sheets.dart';
 import '../03_notifications/notifications_screen.dart';
 import '../07_service_details/service_details_screen.dart';
@@ -23,6 +21,36 @@ List<String> _strings(dynamic v)=> v is List ? v.whereType<String>().toList() : 
 List<_Map> _fields(_Map m)=> (m['fields'] as List? ?? []).whereType<Map>().map((v)=>Map<String,dynamic>.from(v)).toList();
 void _message(BuildContext c,String s)=>ScaffoldMessenger.of(c).showSnackBar(SnackBar(content:Text(s)));
 
+
+int _num(dynamic x) => int.tryParse('$x') ?? 0;
+bool _flag(dynamic x) => x == true || _num(x) == 1;
+class _Catalog {
+  _Catalog(ServiceCatalog c) {
+    for (final a in c.areas) { areas[_num(a['id'])] = a['name'] as String; }
+    for (final m in c.menus) {
+      nodes["${m['id']}"] = {...m,
+        'parent': _num(m['parent']) == 0 ? '' : "${m['parent']}",
+        'order': _num(m['position']), 'icon': _num(m['rev']),
+        'hasIcon': _flag(m['hasIcon']), 'home': _flag(m['home']), 'accept': _flag(m['accept'])};
+    }
+  }
+  final areas = <int,String>{};
+  final nodes = <String,_Map>{};
+}
+Stream<T> _feed<T>(State state, Future<T> Function() read) async* {
+  while (state.mounted) {
+    yield await read();
+    do {
+      await Future<void>.delayed(const Duration(seconds:30));
+      if (!state.mounted) return;
+    } while (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+        !TickerMode.of(state.context) || ModalRoute.of(state.context)?.isCurrent == false);
+  }
+}
+Future<_Catalog> _catalog() async => _Catalog(await ServiceApi.catalog());
+Widget _retry(VoidCallback run) => Center(child: TextButton.icon(onPressed:run,
+    icon:const Icon(Icons.refresh),label:const Text('লোড হয়নি · আবার চেষ্টা করুন')));
+
 class MenuScreen extends ServiceMenuScreen { const MenuScreen({super.key}); }
 
 class ServiceMenuScreen extends StatefulWidget {
@@ -32,16 +60,14 @@ class ServiceMenuScreen extends StatefulWidget {
 }
 class _MenuState extends State<ServiceMenuScreen>{
   final community=Get.find<CommunityService>();
-  late final stream=FirebaseFirestore.instance.doc('directory_config/menu').snapshots();
+  late var stream=_feed(this,_catalog);
   String search='';
-  @override Widget build(BuildContext context)=>StreamBuilder<DocumentSnapshot<_Map>>(stream:stream,builder:(context,s){
-    if(s.hasError && widget.menuId.isEmpty)return const _LegacyMenuScreen();
-    if(s.hasError)return const Scaffold(body:Center(child:Text('মেনু লোড হয়নি। সংযোগ ও Firestore অনুমতি দেখুন।')));
+  @override Widget build(BuildContext context)=>StreamBuilder<_Catalog>(stream:stream,builder:(context,s){
+    if(s.hasError)return Scaffold(appBar:AppBar(),body:_retry(()=>setState(()=>stream=_feed(this,_catalog))));
     if(!s.hasData)return const Scaffold(body:Center(child:CircularProgressIndicator()));
-    if(!s.data!.exists && widget.menuId.isEmpty)return const _LegacyMenuScreen();
-    final nodes=Map<String,dynamic>.from(s.data!.data()?['nodes'] as Map? ?? {});
+    final nodes=s.data!.nodes, areas=s.data!.areas;
     final id=widget.menuId,root=id.isEmpty;
-    final n=root?<String,dynamic>{'kind':'group','title':'সেবা মেনু'}:nodes[id] as _Map?;
+    final n=root?<String,dynamic>{'kind':'group','title':'সেবা মেনু'}:nodes[id];
     if(n==null)return Scaffold(appBar:AppBar(),body:const Center(child:Text('এই মেনু এখন পাওয়া যাচ্ছে না।')));
     final children=nodes.entries.where((e)=>e.value['parent']==id && e.value['title'].toString().toLowerCase().contains(search.toLowerCase())).toList()
       ..sort((a,b){final r=(a.value['order'] as int).compareTo(b.value['order'] as int);return r!=0?r:a.value['title'].toString().compareTo(b.value['title'].toString());});
@@ -49,35 +75,52 @@ class _MenuState extends State<ServiceMenuScreen>{
       switch(v){case 'সেভ করা':Get.to(()=>const SavedItemsScreen());break;case 'সেটিংস':Get.to(()=>const SettingsScreen());break;case 'সাহায্য':Get.to(()=>const HelpPoliciesScreen());break;default:Get.to(()=>const NotificationsScreen());}
     },itemBuilder:(_)=>[for(final label in ['সেভ করা','সেটিংস','সাহায্য','নোটিফিকেশন'])PopupMenuItem(value:label,child:Text(label))])]),
         body:SafeArea(child:Column(children:[
-          ListTile(leading:const Icon(Icons.place_outlined),title:Obx(()=>Text('এলাকা: ${community.selectedArea.value}')),trailing:const Icon(Icons.expand_more),onTap:()=>Get.bottomSheet(const AreaSelectionSheet(),isScrollControlled:true)),
+          ListTile(leading:const Icon(Icons.place_outlined),title:Obx(()=>Text('এলাকা: ${community.selectedArea.value}')),trailing:const Icon(Icons.expand_more),onTap:()=>Get.bottomSheet(AreaSelectionSheet(directoryAreas:areas.values.toList()),isScrollControlled:true)),
           if(n['kind']=='group')...[
             Padding(padding:const EdgeInsets.symmetric(horizontal:16),child:TextField(decoration:const InputDecoration(prefixIcon:Icon(Icons.search),labelText:'এই মেনুতে খুঁজুন'),onChanged:(v)=>setState(()=>search=v))),
             Expanded(child:children.isEmpty?const Center(child:Text('কোনো মেনু পাওয়া যায়নি।')):ListView.builder(itemCount:children.length,itemBuilder:(_,i){
-              final e=children[i];return ListTile(leading:_MenuIcon(key:ValueKey('${e.key}:${e.value['icon']}'),id:e.key,version:e.value['icon'] as int? ?? 0),
+              final e=children[i];return ListTile(leading:_MenuIcon(key:ValueKey('${e.key}:${e.value['icon']}'),id:e.key,version:e.value['icon'] as int,hasIcon:e.value['hasIcon']==true),
                   title:Text(e.value['title']),trailing:const Icon(Icons.chevron_right),onTap:()=>Get.to(()=>ServiceMenuScreen(menuId:e.key),preventDuplicates:false));}))]
-          else Expanded(child:_Listings(id:id,node:n))
+          else Expanded(child:Obx((){
+            final name=community.selectedArea.value;
+            final ids=areas.keys.where((k)=>areas[k]==name);
+            if(name!=_all && ids.isEmpty)return const Center(child:Text('উপরে তালিকাভুক্ত একটি ইউনিয়ন নির্বাচন করুন।'));
+            final zone=name==_all?0:ids.first;
+            return _Listings(key:ValueKey('$id/$zone'),id:id,node:n,zone:zone,areas:areas);
+          }))
         ])));
   });
 }
 
-class _MenuIcon extends StatefulWidget{
-  const _MenuIcon({super.key,required this.id,required this.version});
-  final String id; final int version;
-  @override State<_MenuIcon> createState()=>_IconState();
+class _MenuIcon extends StatelessWidget {
+  const _MenuIcon({super.key,required this.id,required this.version,required this.hasIcon});
+  final String id; final int version; final bool hasIcon;
+  @override Widget build(BuildContext c){
+    const fallback=Icon(Icons.grid_view_rounded,color:Color(0xff245ede));
+    return hasIcon?Image.network(ServiceApi.menuIcon(int.parse(id),revision:version).toString(),
+        width:42,height:42,errorBuilder:(_,__,___)=>fallback):fallback;
+  }
 }
-class _IconState extends State<_MenuIcon>{
-  late final Future<Uint8List>? image=widget.version==0?null:FirebaseFirestore.instance.doc('directory_icons/${widget.id}').get().then((s)=>base64Decode(s.data()?['png']??''));
-  @override Widget build(BuildContext c)=>FutureBuilder<Uint8List>(future:image,builder:(c,s)=>s.hasData&&s.data!.isNotEmpty?Image.memory(s.data!,width:42,height:42,errorBuilder:(_,__,___)=>const Icon(Icons.grid_view)):const Icon(Icons.grid_view_rounded,color:Color(0xff245ede)));
-}
-
 class _Listings extends StatefulWidget{
-  const _Listings({required this.id,required this.node});
+  const _Listings({super.key,required this.id,required this.node,required this.zone,required this.areas});
+  final int zone; final Map<int,String> areas;
   final String id; final _Map node;
   @override State<_Listings> createState()=>_ListingsState();
 }
 class _ListingsState extends State<_Listings>{
   final filters=<String,String>{};
-  late final stream=FirebaseFirestore.instance.collection('services').where('published',isEqualTo:true).where('categoryId',isEqualTo:widget.id).snapshots();
+  late var stream=_feed(this,read);
+  Future<List<_Map>> read()async{
+    final mid=int.parse(widget.id), zone=widget.zone;
+    final rows=<int,_Map>{};
+    int? cursor=0;
+    while(mounted && cursor!=null){
+      final p=await ServiceApi.entries(menuId:mid,areaId:zone,after:cursor);
+      for(final r in p.items){rows[_num(r['id'])]=r;}
+      cursor=p.nextAfter;
+    }
+    return rows.values.toList();
+  }
   @override Widget build(BuildContext c){final fields=_fields(widget.node);
   return Column(children:[
     if(fields.any((f)=>_strings(f['options']).isNotEmpty))SingleChildScrollView(scrollDirection:Axis.horizontal,child:Row(children:[
@@ -85,42 +128,49 @@ class _ListingsState extends State<_Listings>{
           value:_strings(f['options']).contains(filters[f['key']])?filters[f['key']]:'',
           items:[DropdownMenuItem(value:'',child:Text('${f['label']}: সব')),for(final v in _strings(f['options']))DropdownMenuItem(value:v,child:Text(v))],
           onChanged:(v)=>setState(()=>filters[f['key']]=v??'')))])),
-    if(widget.node['accept']==true)TextButton.icon(icon:const Icon(Icons.add),label:const Text('তথ্য যোগ করুন'),onPressed:()=>showDialog(context:c,builder:(_)=>_Submit(id:widget.id,node:widget.node))),
-    Expanded(child:StreamBuilder<QuerySnapshot<_Map>>(stream:stream,builder:(_,s){
-      if(s.hasError)return const Center(child:Text('তালিকা লোড হয়নি। সংযোগ ও অনুমতি দেখুন।'));
+    if(widget.node['accept']==true)TextButton.icon(icon:const Icon(Icons.add),label:const Text('তথ্য যোগ করুন'),onPressed:()=>showDialog(context:c,barrierDismissible:false,builder:(_)=>_Submit(id:widget.id,node:widget.node,areas:widget.areas,zone:widget.zone))),
+    Expanded(child:StreamBuilder<List<_Map>>(stream:stream,builder:(_,s){
+      if(s.hasError)return _retry(()=>setState(()=>stream=_feed(this,read)));
       if(!s.hasData)return const Center(child:CircularProgressIndicator());
-      return Obx((){final area=Get.find<CommunityService>().selectedArea.value;
-      final docs=s.data!.docs.where((d){final v=d.data(),zones=_strings(v['areas']);return (area==_all||zones.contains(area)||zones.contains(_wide))&&fields.every((f){final fl=filters[f['key']];return fl==null||!_strings(f['options']).contains(fl)||v['extra']?[f['key']]==fl;});}).toList()
-        ..sort((a,b){int rank(_Map d)=>area!=_all&&!_strings(d['areas']).contains(area)?1:0;final r=rank(a.data()).compareTo(rank(b.data()));return r==0?(a.data()['name']??'').toString().compareTo((b.data()['name']??'').toString()):r;});
+      List<int> ids(_Map r)=>(r['areas'] as List? ?? []).map(_num).toList();
+      List<String> labels(_Map r)=>[if(_flag(r['wide'])) _wide,
+        for(final id in ids(r)) if(widget.areas.containsKey(id)) widget.areas[id]!];
+      int rank(_Map r)=>widget.zone==0 || ids(r).contains(widget.zone)?0:1;
+      final docs=s.data!.where((r)=>fields.every((f){
+        final v=filters[f['key']];
+        return v==null || !_strings(f['options']).contains(v) || r['extra']?[f['key']]==v;
+      })).toList()..sort((a,b){final n=rank(a).compareTo(rank(b));
+      return n!=0?n:a['name'].toString().compareTo(b['name'].toString());});
       if(docs.isEmpty)return const Center(child:Text('এই নির্বাচনে এখনো কোনো তথ্য নেই।'));
-      return ListView.builder(itemCount:docs.length,itemBuilder:(_,i){final d=docs[i],v=d.data(),phones=publicServicePhones(v);
-      return ListTile(title:Text(v['name']??''),subtitle:Text([_strings(v['areas']).join(' · '),for(final f in fields)if(v['extra']?[f['key']]!=null)'${f['label']}: ${v['extra'][f['key']]}'].where((s)=>s.isNotEmpty).join('\n')),
-          onTap:()=>Get.to(()=>ServiceDetailsScreen(serviceId:d.id)),trailing:phones.isEmpty?null:IconButton(tooltip:'কল করুন',icon:const Icon(Icons.phone_outlined),onPressed:()async{try{if(!await launchUrl(Uri(scheme:'tel',path:phones.first.number)))throw StateError('dialer');}catch(_){if(c.mounted)_message(c,'ডায়ালার খোলা যায়নি।');}}));});});}))
+      return ListView.builder(itemCount:docs.length,itemBuilder:(_,i){final v=docs[i],phone=(v['phone']??'').toString();
+      return ListTile(title:Text(v['name']??''),subtitle:Text([labels(v).join(' · '),for(final f in fields)if(v['extra']?[f['key']]!=null)'${f['label']}: ${v['extra'][f['key']]}'].where((s)=>s.isNotEmpty).join('\n')),
+          onTap:()=>Get.to(()=>ServiceDetailsScreen(serviceId:"mysql:${v['id']}"),arguments:{'source':'mysql','entry':v,'menu':widget.node,'areaNames':widget.areas}),trailing:phone.isEmpty?null:IconButton(tooltip:'কল করুন',icon:const Icon(Icons.phone_outlined),onPressed:()async{try{if(!await launchUrl(Uri(scheme:'tel',path:phone)))throw StateError('dialer');}catch(_){if(c.mounted)_message(c,'ডায়ালার খোলা যায়নি।');}}));});}))
   ]);}
 }
 
 class _Submit extends StatefulWidget{
-  const _Submit({required this.id,required this.node});final String id;final _Map node;
+  const _Submit({required this.id,required this.node,required this.areas,required this.zone});final Map<int,String> areas;final int zone;final String id;final _Map node;
   @override State<_Submit> createState()=>_SubmitState();
 }
 class _SubmitState extends State<_Submit>{
-  final community=Get.find<CommunityService>();final values=<String,String>{};
+  final values=<String,String>{};
   String name='',phone='',area='',error='';bool consent=false,busy=false;
-  @override void initState(){super.initState();if(community.availableAreas.contains(community.selectedArea.value))area=community.selectedArea.value;}
+  @override void initState(){super.initState();area=widget.areas[widget.zone]??'';}
   Future<void> submit()async{
+    if(busy)return;
     final p=phone.trim().replaceAllMapped(RegExp('[০-৯]'),(m)=>'০১২৩৪৫৬৭৮৯'.indexOf(m[0]!).toString()).replaceAll(RegExp(r'[\s()-]'),'');
     if(name.trim().length<2||!RegExp(r'^\+?[0-9]{3,15}$').hasMatch(p)||area.isEmpty||!consent){setState(()=>error='নাম, ফোন, ইউনিয়ন ও প্রকাশের সম্মতি দিন।');return;}
     setState((){busy=true;error='';});try{
-      final auth=FirebaseAuth.instance,u=auth.currentUser??(await auth.signInAnonymously()).user;if(u==null)throw StateError('auth');
-      await FirebaseFirestore.instance.collection('directory_suggestions').doc('${u.uid}_${widget.id}').set({
-        'ownerUid':u.uid,'menuId':widget.id,'name':name.trim(),'phone':p,'areas':[area],'extra':{for(final e in values.entries)if(e.value.trim().isNotEmpty)e.key:e.value.trim()},'consent':true,'createdAt':FieldValue.serverTimestamp()});
+      final zone=widget.areas.entries.firstWhere((a)=>a.value==area).key;
+      await ServiceApi.submit(menuId:int.parse(widget.id),name:name.trim(),phone:p,areaIds:[zone],
+          consent:consent,extra:{for(final e in values.entries)if(e.value.trim().isNotEmpty)e.key:e.value.trim()});
       if(mounted){_message(context,'তথ্য জমা হয়েছে। অনুমোদনের পর তালিকায় আসবে।');Navigator.pop(context);}
-    }catch(_){if(mounted)setState(()=>error='জমা হয়নি। একই মেনুতে আগের আবেদন অপেক্ষমাণ থাকলে আরেকটি জমা হবে না। সংযোগ ও অনুমতিও পরীক্ষা করুন।');}finally{if(mounted)setState(()=>busy=false);}
+    }catch(e){if(mounted)setState(()=>error=e.toString());}finally{if(mounted)setState(()=>busy=false);}
   }
   @override Widget build(BuildContext c)=>PopScope(canPop:!busy,child:AlertDialog(title:Text('${widget.node['title']} · তথ্য যোগ'),content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
     TextField(maxLength:100,decoration:const InputDecoration(labelText:'নাম'),onChanged:(v)=>name=v),
     TextField(keyboardType:TextInputType.phone,maxLength:30,decoration:const InputDecoration(labelText:'প্রকাশের ফোন'),onChanged:(v)=>phone=v),
-    Obx((){final a=community.availableAreas.where((x)=>x!=_all&&x!=_wide).toSet();return DropdownButton<String>(isExpanded:true,hint:const Text('সেবার ইউনিয়ন'),value:a.contains(area)?area:null,items:[for(final x in a)DropdownMenuItem(value:x,child:Text(x))],onChanged:(v)=>setState(()=>area=v??''));}),
+    Builder(builder:(_){final a=widget.areas.values.toSet();return DropdownButton<String>(isExpanded:true,hint:const Text('সেবার ইউনিয়ন'),value:a.contains(area)?area:null,items:[for(final x in a)DropdownMenuItem(value:x,child:Text(x))],onChanged:(v)=>setState(()=>area=v??''));}),
     for(final f in _fields(widget.node))if(_strings(f['options']).isEmpty)TextField(maxLength:120,decoration:InputDecoration(labelText:f['label']),onChanged:(v)=>values[f['key']]=v)
     else DropdownButton<String>(isExpanded:true,hint:Text(f['label']),value:values[f['key']],items:[for(final v in _strings(f['options']))DropdownMenuItem(value:v,child:Text(v))],onChanged:(v)=>setState(()=>values[f['key']]=v??'')),
     CheckboxListTile(contentPadding:EdgeInsets.zero,title:const Text('নাম, নম্বর ও দেওয়া তথ্য প্রকাশে সংশ্লিষ্ট ব্যক্তির সম্মতি আছে'),value:consent,onChanged:(v)=>setState(()=>consent=v??false)),
@@ -128,7 +178,7 @@ class _SubmitState extends State<_Submit>{
   ])),actions:[TextButton(onPressed:busy?null:()=>Navigator.pop(c),child:const Text('ফিরুন')),FilledButton(onPressed:busy?null:submit,child:Text(busy?'জমা হচ্ছে…':'জমা দিন'))]));
 }
 
-/// Shows the same menu IDs on Home; old shortcuts survive until the first publish.
+/// Home uses the same published MySQL menu IDs as Screen 04.
 class DirectoryHomeLinks extends StatefulWidget {
   const DirectoryHomeLinks({super.key,required this.legacy,required this.onAll});
   final WidgetBuilder legacy;
@@ -136,18 +186,17 @@ class DirectoryHomeLinks extends StatefulWidget {
   @override State<DirectoryHomeLinks> createState()=>_HomeLinks();
 }
 class _HomeLinks extends State<DirectoryHomeLinks>{
-  late final feed=FirebaseFirestore.instance.doc('directory_config/menu').snapshots();
-  @override Widget build(BuildContext c)=>StreamBuilder<DocumentSnapshot<_Map>>(stream:feed,builder:(c,s){
-    if(s.hasError)return widget.legacy(c);
+  late var feed=_feed(this,_catalog);
+  @override Widget build(BuildContext c)=>StreamBuilder<_Catalog>(stream:feed,builder:(c,s){
+    if(s.hasError)return _retry(()=>setState(()=>feed=_feed(this,_catalog)));
     if(!s.hasData)return const LinearProgressIndicator(minHeight:2);
-    if(!s.data!.exists)return widget.legacy(c);
-    final tree=Map<String,dynamic>.from(s.data!.data()?['nodes'] as Map? ?? {});
+    final tree=s.data!.nodes;
     final all=tree.entries.toList()..sort((a,b){final k=(a.value['order'] as int).compareTo(b.value['order'] as int);return k==0?a.key.compareTo(b.key):k;});
     final pinned=all.where((e)=>e.value['home']==true);
     final items=(pinned.isEmpty?all.where((e)=>e.value['parent']==''):pinned).take(8);
     return Card(child:Padding(padding:const EdgeInsets.all(16),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       Row(children:[const Expanded(child:Text('দ্রুত সেবা',style:TextStyle(fontWeight:FontWeight.bold,fontSize:18))),TextButton(onPressed:widget.onAll,child:const Text('সব মেনু'))]),
-      Wrap(spacing:8,runSpacing:8,children:[for(final e in items)ActionChip(avatar:_MenuIcon(key:ValueKey('${e.key}-${e.value['icon']}'),id:e.key,version:e.value['icon'] as int? ?? 0),label:Text(e.value['title']),onPressed:()=>Get.to(()=>ServiceMenuScreen(menuId:e.key),preventDuplicates:false))])
+      Wrap(spacing:8,runSpacing:8,children:[for(final e in items)ActionChip(avatar:_MenuIcon(key:ValueKey('${e.key}-${e.value['icon']}'),id:e.key,version:e.value['icon'] as int,hasIcon:e.value['hasIcon']==true),label:Text(e.value['title']),onPressed:()=>Get.to(()=>ServiceMenuScreen(menuId:e.key),preventDuplicates:false))])
     ])));
   });
 }
