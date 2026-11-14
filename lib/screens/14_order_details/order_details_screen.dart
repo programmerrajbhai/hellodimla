@@ -1,12 +1,11 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
-import '../../commerce/shop_models.dart';
-import '../../commerce/shop_service.dart';
-import '../../commerce/shop_widgets.dart';
-import '../11_cart/cart_screen.dart';
-import '../13_my_orders/my_orders_screen.dart';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/network/service_api.dart';
 
 class OrderDetailsScreen extends StatefulWidget {
   final String? orderId;
@@ -19,688 +18,336 @@ class OrderDetailsScreen extends StatefulWidget {
   });
 
   @override
-  State<OrderDetailsScreen> createState() =>
-      _OrderDetailsScreenState();
+  State<OrderDetailsScreen> createState() => _OrderDetailsScreenState();
 }
 
-class _OrderDetailsScreenState
-    extends State<OrderDetailsScreen> {
-  final shop = ShopService.instance;
-  late Future<String> identity;
+class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
+  static const _blue = Color(0xFF205AF2);
+  static const _ink = Color(0xFF172746);
+  static const _muted = Color(0xFF586780);
+
+  late Future<_Receipt> _receipt;
 
   @override
   void initState() {
     super.initState();
-    identity = shop.identity();
-    shop.loadLocal();
+    _receipt = _load();
   }
 
-  Future<void> cancel() => guarded(() async {
-    final controller = TextEditingController();
+  @override
+  void didUpdateWidget(covariant OrderDetailsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId != widget.orderId) _receipt = _load();
+  }
 
-    final reason = await shopSheet<String>(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'বাতিলের কারণ',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: controller,
-            maxLength: 300,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              hintText: 'কারণ লিখুন',
-            ),
-          ),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () {
-              if (controller.text.trim().length < 2) {
-                shopError(StateError('কারণ লিখুন।'));
-                return;
-              }
-              Get.back(result: controller.text.trim());
-            },
-            child: const Text('পরবর্তী ধাপ'),
+  Future<_Receipt> _load() async {
+    final id = int.tryParse(widget.orderId?.trim() ?? '');
+    if (id == null || id < 1) {
+      throw const _Problem('সঠিক অর্ডার নম্বর পাওয়া যায়নি।');
+    }
+
+    final token = await SharedPreferencesAsync().getString('sd.token');
+    if (token == null || !RegExp(r'^[a-f0-9]{64}$').hasMatch(token)) {
+      throw const _Problem('এই ডিভাইসে অর্ডারের পরিচয় পাওয়া যায়নি।');
+    }
+
+    final uri = ServiceApi.menuIcon(1).resolve('mobile.php').replace(
+      queryParameters: {'a': 'detail', 'id': '$id'},
+    );
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+
+    try {
+      final request = await client.getUrl(uri).timeout(
+        const Duration(seconds: 12),
+      );
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set('X-Device-Token', token);
+
+      final response = await request.close().timeout(
+        const Duration(seconds: 15),
+      );
+
+      if (response.statusCode == 404) {
+        throw const _Problem('এই ডিভাইসের জন্য অর্ডারটি পাওয়া যায়নি।');
+      }
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        throw const _Problem('এই ডিভাইস থেকে অর্ডারটি দেখা যাচ্ছে না।');
+      }
+      if (response.statusCode != 200) {
+        throw _Problem('অর্ডার লোড হয়নি (HTTP ${response.statusCode})।');
+      }
+
+      final body = await utf8.decoder.bind(response).join().timeout(
+        const Duration(seconds: 15),
+      );
+      return _Receipt.parse(jsonDecode(body), id);
+    } on TimeoutException {
+      throw const _Problem('সার্ভার উত্তর দিতে সময় নিচ্ছে। আবার চেষ্টা করুন।');
+    } on IOException {
+      throw const _Problem('সার্ভারের সঙ্গে সংযোগ হয়নি। আবার চেষ্টা করুন।');
+    } on FormatException {
+      throw const _Problem('সার্ভার থেকে অর্ডারের তথ্য সঠিকভাবে আসেনি।');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _refresh() async {
+    final next = _load();
+    setState(() => _receipt = next);
+    try {
+      await next;
+    } catch (_) {
+      // FutureBuilder একই error দেখাবে।
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FC),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        foregroundColor: _ink,
+        title: const Text('অর্ডারের বিস্তারিত'),
+        actions: [
+          IconButton(
+            tooltip: 'সর্বশেষ অবস্থা দেখুন',
+            onPressed: _refresh,
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
-    );
-
-    Future<void>.delayed(
-      const Duration(milliseconds: 350),
-      controller.dispose,
-    );
-
-    if (reason == null) return;
-
-    if (await confirm(
-      'অর্ডার বাতিল করবেন?',
-      'Firestore cancellation গ্রহণ করলে order বাতিল হবে।',
-      action: 'বাতিল করুন',
-    )) {
-      await shop.cancel(widget.orderId!, reason);
-    }
-  });
-
-  Future<void> reorder(Map<String, dynamic> order) =>
-      guarded(() async {
-        if (!await confirm(
-          'আবার কিনবেন?',
-          'আগের cart বদলে বর্তমান দাম ও stock অনুযায়ী cart তৈরি হবে।',
-        )) {
-          return;
-        }
-
-        final skipped = await shop.reorder(order);
-
-        if (skipped.isNotEmpty) {
-          await Get.dialog(
-            AlertDialog(
-              title: const Text('কিছু পণ্য যোগ হয়নি'),
-              content: SingleChildScrollView(
-                child: Text(skipped.join('\n')),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: Get.back,
-                  child: const Text('ঠিক আছে'),
-                ),
-              ],
-            ),
-          );
-        }
-
-        Get.to(() => const CartScreen());
-      });
-
-  Future<void> issue() => shopSheet<void>(
-    _IssueSheet(orderId: widget.orderId!),
-  ).then((_) {});
-
-  Future<void> requests() => shopSheet<void>(
-    StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: shop.db
-          .collection('orders/${widget.orderId}/issues')
-          .orderBy('createdAt', descending: true)
-          .snapshots(),
-      builder: (_, s) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'সমস্যা / Return-এর অবস্থা',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (s.hasError)
-            Text(ShopService.message(s.error!)),
-          if (!s.hasData && !s.hasError)
-            const CircularProgressIndicator(),
-          if (s.hasData && s.data!.docs.isEmpty)
-            const Text('এখনো কোনো অনুরোধ করা হয়নি।'),
-          if (s.hasData)
-            for (final d in s.data!.docs)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: ShopBox(
+      body: SafeArea(
+        child: FutureBuilder<_Receipt>(
+          future: _receipt,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError || !snapshot.hasData) {
+              final error = snapshot.error;
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
                   child: Column(
-                    crossAxisAlignment:
-                    CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
+                      const Icon(Icons.receipt_long_outlined,
+                          size: 42, color: _muted),
+                      const SizedBox(height: 12),
                       Text(
-                        '${d.data()['type'] == 'return' ? 'Return' : 'সমস্যা'}'
-                            ' · ${d.data()['reason']}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                        ),
+                        error is _Problem ? error.message : 'অর্ডার লোড হয়নি।',
+                        textAlign: TextAlign.center,
                       ),
-                      Text(
-                        '${d.data()['description'] ?? ''}',
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'অনুরোধ: '
-                            '${statusLabel('${d.data()['requestStatus']}')}',
-                      ),
-                      Text(
-                        'Refund: '
-                            '${statusLabel('${d.data()['refundStatus']}')}'
-                            ' · ${money(number(d.data()['refundMinor']))}',
-                      ),
-                      if ('${d.data()['response'] ?? ''}'
-                          .isNotEmpty)
-                        Text(
-                          'Store: ${d.data()['response']}',
-                        ),
-                      Text(
-                        displayDate(
-                          d.data()['createdAt'],
-                        ),
-                        style: const TextStyle(
-                          color: Colors.blueGrey,
-                          fontSize: 12,
-                        ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _refresh,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('আবার চেষ্টা করুন'),
                       ),
                     ],
                   ),
                 ),
-              ),
-          const Text(
-            'Return অনুমোদন, refund সিদ্ধান্ত ও refund দেওয়া—আলাদা ধাপ।',
-          ),
-        ],
-      ),
-    ),
-  ).then((_) {});
+              );
+            }
 
-  Widget details(
-      Map<String, dynamic> o,
-      bool cached,
-      ) {
-    final status = '${o['status']}';
-    final delivery = object(o['address']);
-
-    const stages = [
-      'placed',
-      'confirmed',
-      'packing',
-      'out_for_delivery',
-      'delivered',
-    ];
-
-    final step = stages.indexOf(status);
-    final history =
-    ((o['statusHistory'] as List?) ?? []).map(object).toList();
-
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        if (o['demoMode'] == true)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 14),
-            child: Text(
-              'DEMO ORDER • এটি বাস্তব delivery order নয়।',
-              style: TextStyle(
-                color: Colors.deepOrange,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        if (cached)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 14),
-            child: Text(
-              'Offline তথ্য; internet এলে সর্বশেষ status দেখাবে।',
-              style: TextStyle(color: Colors.deepOrange),
-            ),
-          ),
-        if (widget.showConfirmation && status == 'placed')
-          Container(
-            padding: const EdgeInsets.all(22),
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFE4F7F1),
-              borderRadius: BorderRadius.circular(26),
-            ),
-            child: const Column(
-              children: [
-                Icon(
-                  Icons.check_circle_rounded,
-                  size: 56,
-                  color: Colors.teal,
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'অর্ডারের অনুরোধ জমা হয়েছে',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.teal,
+            final r = snapshot.data!;
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                children: [
+                  if (widget.showConfirmation)
+                    const Card(
+                      color: Color(0xFFE6F6EB),
+                      child: ListTile(
+                        leading: Icon(Icons.check_circle, color: Color(0xFF187544)),
+                        title: Text('আপনার অর্ডার গ্রহণ করা হয়েছে'),
+                        subtitle: Text('নিচে অর্ডারের নম্বর ও রসিদ দেখুন।'),
+                      ),
+                    ),
+                  _section(
+                    icon: Icons.receipt_long_outlined,
+                    title: 'অর্ডার #${_bn('${r.id}')}',
+                    children: [
+                      _pair('বর্তমান অবস্থা', _statusLabel(r.status)),
+                      if (r.created.isNotEmpty)
+                        _pair('অর্ডারের সময়', _bn(r.created)),
+                    ],
                   ),
-                ),
-                Text(
-                  'Stock ও delivery যাচাইয়ের পর দোকান confirm করবে।',
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ShopBox(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SelectableText(
-                '${o['orderNumber']}',
-                style: const TextStyle(
-                  fontSize: 23,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                displayDate(o['createdAt']),
-                style: const TextStyle(color: Colors.blueGrey),
-              ),
-              const SizedBox(height: 18),
-              if (status == 'cancelled') ...[
-                Text(
-                  statusLabel(status),
-                  style: const TextStyle(
-                    color: Colors.deepOrange,
-                    fontWeight: FontWeight.w800,
+                  _section(
+                    icon: Icons.location_on_outlined,
+                    title: 'ডেলিভারির ঠিকানা',
+                    children: [
+                      if (r.area.isNotEmpty) _pair('ইউনিয়ন', r.area),
+                      SelectableText(
+                        r.address.isEmpty ? 'ঠিকানা দেওয়া হয়নি' : r.address,
+                        style: const TextStyle(color: _ink, height: 1.5),
+                      ),
+                    ],
                   ),
-                ),
-                Text('${o['cancellationReason'] ?? ''}'),
-              ] else
-                for (var i = 0; i < stages.length; i++)
-                  Padding(
-                    padding:
-                    const EdgeInsets.symmetric(vertical: 8),
-                    child: Row(
-                      children: [
-                        Icon(
-                          i <= step
-                              ? Icons.check_circle
-                              : Icons.radio_button_unchecked,
-                          color: i <= step
-                              ? shopBlue
-                              : Colors.blueGrey.shade200,
+                  _section(
+                    icon: Icons.shopping_bag_outlined,
+                    title: 'অর্ডারের পণ্য',
+                    children: [
+                      if (r.lines.isEmpty) const Text('পণ্যের তালিকা পাওয়া যায়নি।'),
+                      for (final line in r.lines) ...[
+                        _pair(line.title, _money(line.price * line.qty), bold: true),
+                        Text(
+                          '${_bn('${line.qty}')} × ${_money(line.price)}',
+                          style: const TextStyle(color: _muted),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            statusLabel(stages[i]),
-                            style: TextStyle(
-                              fontWeight: i == step
-                                  ? FontWeight.w900
-                                  : FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        if (history.any(
-                              (x) => x['status'] == stages[i],
-                        ))
-                          Text(
-                            displayDate(
-                              history.firstWhere(
-                                    (x) => x['status'] == stages[i],
-                              )['at'],
-                            ).split(' · ').first,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.blueGrey,
-                            ),
-                          ),
+                        const Divider(height: 22),
                       ],
-                    ),
+                      _pair('ডেলিভারি চার্জ', _money(r.delivery)),
+                      _pair('সর্বমোট', _money(r.total), bold: true),
+                    ],
                   ),
-            ],
-          ),
+                ],
+              ),
+            );
+          },
         ),
-        const SizedBox(height: 16),
-        ShopBox(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'পণ্য ও হিসাব',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              for (final x in
-              ((o['lines'] as List?) ?? []).map(object))
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: ShopImage(
-                      '${x['imageUrl']}',
-                      width: 48,
-                      height: 48,
-                    ),
-                  ),
-                  title: Text('${x['name']}'),
-                  subtitle: Text(
-                    '${x['variantName'] ?? ''} · '
-                        '${x['qty']} ${x['unit']} × '
-                        '${money(number(x['priceMinor']))}',
-                  ),
-                  trailing: Text(
-                    money(number(x['subtotalMinor'])),
-                  ),
-                ),
-              const Divider(),
-              totalRow(
-                'Subtotal',
-                number(o['subtotalMinor']),
-              ),
-              totalRow(
-                'Delivery',
-                number(o['deliveryMinor']),
-              ),
-              if (number(o['discountMinor']) > 0)
-                totalRow(
-                  'Discount',
-                  -number(o['discountMinor']),
-                ),
-              totalRow(
-                'মোট',
-                number(o['totalMinor']),
-                bold: true,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        ShopBox(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Delivery ও payment',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '${delivery['name']} · ${delivery['phone']}',
-              ),
-              Text('${delivery['zoneLabel']}'),
-              Text('${delivery['address']}'),
-              if ('${delivery['landmark'] ?? ''}'.isNotEmpty)
-                Text('Landmark: ${delivery['landmark']}'),
-              if ('${delivery['note'] ?? ''}'.isNotEmpty)
-                Text('Note: ${delivery['note']}'),
-              const Divider(height: 28),
-              const Text('Cash on Delivery'),
-              Text(
-                'Payment: ${statusLabel('${o['paymentStatus']}')}',
-              ),
-              TextButton(
-                onPressed: () => policies(
-                  StoreConfig({
-                    'deliveryPolicy': o['deliveryPolicy'],
-                    'returnPolicy': o['returnPolicy'],
-                  }),
-                ),
-                child: const Text(
-                  'এই order-এর delivery ও return policy',
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        ShopBox(
-          child: Obx(
-                () => Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                FilledButton.icon(
-                  onPressed: () => dialStore(
-                    '${o['supportPhone'] ?? ''}',
-                  ),
-                  icon: const Icon(Icons.call_outlined),
-                  label: const Text('Store support'),
-                ),
-                const SizedBox(height: 8),
-                if (status == 'placed')
-                  OutlinedButton(
-                    onPressed: shop.busy.value ? null : cancel,
-                    child: const Text('Order বাতিল করুন'),
-                  ),
-                OutlinedButton(
-                  onPressed: shop.busy.value ? null : issue,
-                  child: const Text(
-                    'সমস্যা / ফেরতের অনুরোধ',
-                  ),
-                ),
-                TextButton(
-                  onPressed: requests,
-                  child: const Text(
-                    'অনুরোধ ও refund-এর অবস্থা',
-                  ),
-                ),
-                TextButton(
-                  onPressed: shop.busy.value || shop.locked
-                      ? null
-                      : () => reorder(o),
-                  child: const Text('আবার কিনুন'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 20),
-      ],
+      ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) => ShopPage(
-    title: 'অর্ডারের বিস্তারিত',
-    actions: [
-      IconButton(
-        tooltip: 'আমার অর্ডার',
-        onPressed: () => Get.to(
-              () => const MyOrdersScreen(),
-        ),
-        icon: const Icon(Icons.receipt_long_outlined),
+  Widget _section({
+    required IconData icon,
+    required String title,
+    required List<Widget> children,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE0E7F2)),
+        borderRadius: BorderRadius.circular(18),
       ),
-    ],
-    body: widget.orderId == null || widget.orderId!.isEmpty
-        ? const ShopEmpty('Order ID দেওয়া হয়নি।')
-        : FutureBuilder<String>(
-      future: identity,
-      builder: (_, auth) {
-        if (auth.hasError) {
-          return ShopEmpty(
-            ShopService.message(auth.error!),
-          );
-        }
-
-        if (!auth.hasData) {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
-        }
-
-        return StreamBuilder<
-            DocumentSnapshot<Map<String, dynamic>>>(
-          stream: shop.order(widget.orderId!),
-          builder: (_, snapshot) {
-            if (snapshot.hasError) {
-              return ShopEmpty(
-                ShopService.message(snapshot.error!),
-              );
-            }
-
-            if (!snapshot.hasData) {
-              return const Center(
-                child: CircularProgressIndicator(),
-              );
-            }
-
-            final o = snapshot.data!.data();
-
-            if (o == null ||
-                o['ownerUid'] != auth.data) {
-              return const ShopEmpty(
-                'এই পরিচয়ের order পাওয়া যায়নি।',
-              );
-            }
-
-            return details(
-              o,
-              snapshot.data!.metadata.isFromCache,
-            );
-          },
-        );
-      },
-    ),
-  );
-}
-
-class _IssueSheet extends StatefulWidget {
-  final String orderId;
-
-  const _IssueSheet({required this.orderId});
-
-  @override
-  State<_IssueSheet> createState() => _IssueSheetState();
-}
-
-class _IssueSheetState extends State<_IssueSheet> {
-  final shop = ShopService.instance;
-  final reason = TextEditingController();
-  final description = TextEditingController();
-
-  late final String requestId = shop.newId();
-  String type = 'issue';
-  String failure = '';
-  bool submitting = false;
-  bool frozen = false;
-
-  @override
-  void dispose() {
-    reason.dispose();
-    description.dispose();
-    super.dispose();
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 22, color: _blue),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(title, style: const TextStyle(
+                  fontSize: 17, fontWeight: FontWeight.w700, color: _ink,
+                )),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
   }
 
-  Future<void> submit() async {
-    if (reason.text.trim().length < 2) {
-      shopError(StateError('কারণ লিখুন।'));
-      return;
-    }
-
-    setState(() {
-      submitting = true;
-      frozen = true;
-      failure = '';
-    });
-
-    try {
-      await shop.issue(
-        orderId: widget.orderId,
-        requestId: requestId,
-        type: type,
-        reason: reason.text.trim(),
-        description: description.text.trim(),
-      );
-
-      if (!mounted) return;
-
-      Get.back();
-      Get.snackbar(
-        'অনুরোধ জমা হয়েছে',
-        'Review ও refund-এর অবস্থা আলাদাভাবে দেখুন।',
-        snackPosition: SnackPosition.BOTTOM,
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() => failure = ShopService.message(e));
-      }
-    } finally {
-      if (mounted) setState(() => submitting = false);
-    }
+  Widget _pair(String label, String value, {bool bold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: Text(label, style: const TextStyle(color: _ink))),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: bold ? _blue : _ink,
+                fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text(
-        'সমস্যা / ফেরতের অনুরোধ',
-        style: TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-      const SizedBox(height: 14),
-      const Text(
-        'Return শুধু delivered order ও নির্ধারিত সময়সীমায়। '
-            'আবেদন মানেই refund approval নয়। '
-            'এই version-এ লিখিত আবেদন নেওয়া হয়।',
-      ),
-      const SizedBox(height: 16),
-      AbsorbPointer(
-        absorbing: frozen,
-        child: Column(
-          children: [
-            DropdownButtonFormField<String>(
-              initialValue: type,
-              decoration: const InputDecoration(
-                labelText: 'অনুরোধের ধরন',
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'issue',
-                  child: Text('সমস্যা জানান'),
-                ),
-                DropdownMenuItem(
-                  value: 'return',
-                  child: Text('পণ্য ফেরত'),
-                ),
-              ],
-              onChanged: (v) => setState(
-                    () => type = v!,
-              ),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: reason,
-              maxLength: 120,
-              decoration: const InputDecoration(
-                labelText: 'কারণ',
-              ),
-            ),
-            TextField(
-              controller: description,
-              maxLength: 2000,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: 'বিবরণ (optional)',
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (failure.isNotEmpty)
-        Padding(
-          padding:
-          const EdgeInsets.symmetric(vertical: 12),
-          child: Text(
-            '$failure\nএকই অনুরোধ আবার চেষ্টা করতে পারবেন।',
-            style: const TextStyle(
-              color: Colors.deepOrange,
-            ),
-          ),
-        ),
-      SizedBox(
-        width: double.infinity,
-        child: FilledButton(
-          onPressed: submitting ? null : submit,
-          child: Text(
-            submitting
-                ? 'জমা হচ্ছে…'
-                : 'অনুরোধ জমা দিন',
-          ),
-        ),
-      ),
-    ],
-  );
+class _Problem implements Exception {
+  final String message;
+  const _Problem(this.message);
+}
+
+class _Line {
+  final String title;
+  final int qty;
+  final int price; // পয়সায় একক দাম
+  const _Line(this.title, this.qty, this.price);
+}
+
+class _Receipt {
+  final int id, total, delivery;
+  final String status, area, address, created;
+  final List<_Line> lines;
+
+  const _Receipt(this.id, this.total, this.delivery, this.status,
+      this.area, this.address, this.created, this.lines);
+
+  static _Receipt parse(dynamic json, int expectedId) {
+    if (json is! Map || json['order'] is! Map || json['lines'] is! List) {
+      throw const FormatException();
+    }
+    final order = json['order'] as Map;
+    if (int.tryParse('${order['id']}') != expectedId) {
+      throw const FormatException();
+    }
+
+    final lines = <_Line>[];
+    for (final row in json['lines'] as List) {
+      if (row is! Map) throw const FormatException();
+      final qty = int.tryParse('${row['qty']}');
+      if (qty == null || qty < 1) throw const FormatException();
+      lines.add(_Line('${row['title'] ?? ''}', qty, _minor(row['price'])));
+    }
+
+    return _Receipt(
+      expectedId, _minor(order['total']), _minor(order['delivery']),
+      '${order['status'] ?? ''}', '${order['area_name'] ?? ''}',
+      '${order['address'] ?? ''}', '${order['created_at'] ?? ''}', lines,
+    );
+  }
+}
+
+int _minor(dynamic value) {
+  final n = num.tryParse('$value');
+  if (n == null || !n.isFinite || n < 0) throw const FormatException();
+  return (n * 100).round();
+}
+
+String _money(int minor) {
+  final taka = minor ~/ 100;
+  final paisa = minor % 100;
+  final amount = paisa == 0 ? '$taka' : '$taka.${'$paisa'.padLeft(2, '0')}';
+  return '৳${_bn(amount)}';
+}
+
+String _bn(String text) => text.replaceAllMapped(
+  RegExp('[0-9]'), (m) => '০১২৩৪৫৬৭৮৯'[int.parse(m[0]!)],
+);
+
+String _statusLabel(String status) {
+  const labels = {
+    'placed': 'অর্ডার গ্রহণ করা হয়েছে',
+    'confirmed': 'নিশ্চিত হয়েছে',
+    'packing': 'প্যাকিং চলছে',
+    'packed': 'প্যাকিং সম্পন্ন',
+    'out_for_delivery': 'ডেলিভারির পথে',
+    'delivered': 'ডেলিভারি সম্পন্ন',
+    'cancelled': 'বাতিল হয়েছে',
+    'canceled': 'বাতিল হয়েছে',
+  };
+  return labels[status.trim().toLowerCase()] ??
+      (status.isEmpty ? 'অবস্থা পাওয়া যায়নি' : status);
 }

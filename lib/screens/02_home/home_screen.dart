@@ -459,196 +459,177 @@ class _HomeState extends State<HomeScreen> {
       errorBuilder: (_, __, ___) => fallback,
     );
   }
-
   Widget quick() {
-    const accents = <Color>[
-      Color(0xFF1959E8),
-      Color(0xFFBE3455),
-      Color(0xFF087F75),
-      Color(0xFF7354B5),
-    ];
+    const navy = Color(0xFF162947);
+    const blue = Color(0xFF2157CA);
 
-    return surface(
-      Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 15),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 4,
-                  height: 22,
-                  decoration: BoxDecoration(
-                    color: _blue,
-                    borderRadius: radius(4),
-                  ),
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: label(
-                    'দ্রুত সেবা',
-                    size: 18,
-                    weight: FontWeight.w700,
-                  ),
-                ),
-                TextButton(
-                  onPressed: menu,
-                  style: TextButton.styleFrom(
-                    foregroundColor: _blue,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      label(
-                        'সব মেনু',
-                        size: 13,
-                        color: _blue,
-                        weight: FontWeight.w600,
+    const labels = <String, String>{
+      'ambulance': 'অ্যাম্বুলেন্স',
+      'ambulance service': 'অ্যাম্বুলেন্স',
+      'blood donation': 'রক্তদান',
+      'blood donations': 'রক্তদান',
+      'blood donor': 'রক্তদাতা',
+      'blood donors': 'রক্তদাতা',
+      'doctor': 'ডাক্তার',
+      'pharmacy': 'ফার্মেসি',
+      'van': 'ভ্যান',
+      'auto': 'অটো',
+    };
+
+    Widget tile({
+      required String title,
+      required String? imageUrl,
+      required VoidCallback onTap,
+    }) {
+      final isBlood = title.contains('রক্ত');
+      final accent = isBlood ? const Color(0xFFAE3650) : blue;
+      final fallback = Icon(
+        isBlood
+            ? Icons.bloodtype_rounded
+            : title.contains('অ্যাম্বুলেন্স')
+            ? Icons.local_hospital_rounded
+            : Icons.grid_view_rounded,
+        color: accent,
+        size: 28,
+      );
+
+      return Material(
+        color: isBlood ? const Color(0xFFFFF6F7) : const Color(0xFFF3F7FF),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(
+            color: isBlood ? const Color(0xFFF2D9DE) : const Color(0xFFD9E5FA),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 64),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: imageUrl == null
+                        ? fallback
+                        : ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        imageUrl,
+                        fit: BoxFit.contain,
+                        excludeFromSemantics: true,
+                        errorBuilder: (_, __, ___) => fallback,
                       ),
-                      const SizedBox(width: 2),
-                      const Icon(Icons.chevron_right_rounded, size: 17),
-                    ],
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: navy,
+                        fontSize: 15,
+                        height: 1.3,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFDFE7F2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 4,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: blue,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'দ্রুত সেবা',
+                  style: TextStyle(
+                    color: navy,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            feed<RowData>(
-              c.quick,
-              'এখনো কোনো দ্রুত সেবা যোগ করা হয়নি।',
-                  (rows) {
-                return LayoutBuilder(
-                  builder: (context, bounds) {
-                    const gap = 10.0;
-                    final cardWidth = (bounds.maxWidth - gap) / 2;
-                    final titleHeight =
-                        MediaQuery.textScalerOf(context).scale(15) * 1.45 * 2;
+              ),
+              TextButton(
+                onPressed: menu,
+                child: const Text(
+                  'সব মেনু ›',
+                  style: TextStyle(color: blue, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          feed(c.quick, 'এখনো কোনো সেবা যোগ করা হয়নি।', (rows) {
+            return LayoutBuilder(
+              builder: (context, box) {
+                const gap = 8.0;
+                final largeText =
+                    MediaQuery.textScalerOf(context).scale(15) > 21;
+                final width = largeText || box.maxWidth < 250
+                    ? box.maxWidth
+                    : (box.maxWidth - gap) / 2;
 
-                    return Wrap(
-                      spacing: gap,
-                      runSpacing: gap,
-                      children: [
-                        for (var i = 0; i < rows.length; i++)
-                          Builder(
-                            builder: (context) {
-                              final item = rows[i];
-                              final id = homeInt(item['id']);
-                              final title = homeText(item['title']);
-                              final accent = accents[i % accents.length];
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: rows.map<Widget>((m) {
+                    final raw = homeText(m['title']).trim();
+                    final title = labels[raw.toLowerCase()] ??
+                        (raw.isEmpty ? 'স্থানীয় সেবা' : raw);
 
-                              final fallbackIcon = Icon(
-                                Icons.grid_view_rounded,
-                                size: 22,
-                                color: accent,
-                              );
-
-                              return SizedBox(
-                                key: ValueKey('quick-service-$id'),
-                                width: cardWidth,
-                                child: Material(
-                                  color: Color.alphaBlend(
-                                    accent.withValues(alpha: .045),
-                                    Colors.white,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: radius(16),
-                                    side: BorderSide(
-                                      color: accent.withValues(alpha: .16),
-                                    ),
-                                  ),
-                                  clipBehavior: Clip.antiAlias,
-                                  child: InkWell(
-                                    onTap: () => c.openMenu(item),
-                                    splashColor: accent.withValues(alpha: .10),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Container(
-                                                width: 42,
-                                                height: 42,
-                                                padding: const EdgeInsets.all(6),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.white,
-                                                  borderRadius: radius(12),
-                                                  border: Border.all(
-                                                    color: accent.withValues(
-                                                      alpha: .10,
-                                                    ),
-                                                  ),
-                                                ),
-                                                child: homeFlag(item['hasIcon'])
-                                                    ? ClipRRect(
-                                                  borderRadius: radius(7),
-                                                  child: Image.network(
-                                                    ServiceApi.menuIcon(
-                                                      id,
-                                                      revision: homeInt(
-                                                        item['rev'],
-                                                      ),
-                                                    ).toString(),
-                                                    fit: BoxFit.contain,
-                                                    errorBuilder:
-                                                        (_, __, ___) =>
-                                                    fallbackIcon,
-                                                  ),
-                                                )
-                                                    : fallbackIcon,
-                                              ),
-                                              const Spacer(),
-                                              Icon(
-                                                Icons.chevron_right_rounded,
-                                                size: 18,
-                                                color: accent,
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 10),
-                                          SizedBox(
-                                            height: titleHeight,
-                                            child: Align(
-                                              alignment: Alignment.centerLeft,
-                                              child: Text(
-                                                title,
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: GoogleFonts.hindSiliguri(
-                                                  fontSize: 15,
-                                                  height: 1.35,
-                                                  color: _ink,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                      ],
+                    return SizedBox(
+                      width: width,
+                      child: tile(
+                        title: title,
+                        imageUrl: homeFlag(m['hasIcon'])
+                            ? ServiceApi.menuIcon(
+                          homeInt(m['id']),
+                          revision: homeInt(m['rev']),
+                        ).toString()
+                            : null,
+                        onTap: () => c.openMenu(m),
+                      ),
                     );
-                  },
+                  }).toList(),
                 );
               },
-            ),
-          ],
-        ),
+            );
+          }),
+        ],
       ),
-      r: 20,
     );
   }
-
-
   Widget shopping() => panel(
     'Hello Store',
     'আপনার এলাকার কেনাকাটা',
