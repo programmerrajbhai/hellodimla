@@ -1,615 +1,421 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
 
 import '../../commerce/shop_models.dart';
-import '../../commerce/shop_service.dart';
 import '../../commerce/shop_widgets.dart';
-import '../../services/app_settings_service.dart';
-import '../../services/settings_widgets.dart' show showPolicy;
-import '../14_order_details/order_details_screen.dart';
+
+typedef CheckoutJson = Map<String, dynamic>;
 
 class CheckoutScreen extends StatefulWidget {
-  const CheckoutScreen({super.key});
+  const CheckoutScreen({
+    super.key,
+    required this.zones,
+    required this.lines,
+    required this.loadStore,
+  });
+
+  final List<CheckoutJson> zones;
+  final List<CartLine> lines;
+
+  // নির্বাচিত ইউনিয়নের সর্বশেষ পণ্য, স্টক, দাম ও ডেলিভারি চার্জ।
+  final Future<CheckoutJson> Function(int areaId) loadStore;
 
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
 }
 
 class _CheckoutScreenState extends State<CheckoutScreen> {
-  final shop = ShopService.instance;
-  final form = GlobalKey<FormState>();
+  final _form = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _phone = TextEditingController();
+  final _address = TextEditingController();
 
-  final name = TextEditingController();
-  final phone = TextEditingController();
-  final address = TextEditingController();
-  final landmark = TextEditingController();
-  final note = TextEditingController();
+  int? _area;
+  bool _checking = false;
+  String _error = '';
 
-  String? zoneId;
-  Map<String, dynamic>? quote;
+  static const _blue = Color(0xFF1959E8);
+  static const _ink = Color(0xFF162644);
+  static const _muted = Color(0xFF596A80);
 
-  bool acceptedIdentity = false;
-  bool acceptedPolicies = false;
+  int _id(dynamic value) => int.tryParse('$value') ?? 0;
 
-  Future<void> openPolicy(
-      String key,
-      String title,
-      ) =>
-      guarded(() async {
-        final settings = AppSettingsService.instance;
-        await settings.initialize();
-        await showPolicy(key, title);
-      });
+  int _minor(dynamic value) {
+    final price = double.tryParse('$value');
+    if (price == null || !price.isFinite || price < 0) {
+      throw const FormatException('দামের তথ্য সঠিক নয়।');
+    }
+    return (price * 100).round();
+  }
+
+  String _normalPhone(String input) {
+    var value = input.trim().replaceAllMapped(
+      RegExp('[০-৯]'),
+          (m) => '০১২৩৪৫৬৭৮৯'.indexOf(m[0]!).toString(),
+    );
+    value = value.replaceAll(RegExp(r'[\s()-]'), '');
+    if (value.startsWith('+880')) value = '0${value.substring(4)}';
+    return value;
+  }
+
+  String _attemptKey() {
+    final random = Random.secure();
+    return List.generate(
+      16,
+          (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+  }
 
   @override
   void initState() {
     super.initState();
-    setup();
-  }
-
-  Future<void> setup() async {
-    await shop.loadLocal();
-
-    if (shop.config.value == null) {
-      await shop.loadCatalog();
+    if (widget.zones.length == 1) {
+      _area = _id(widget.zones.first['id']);
     }
-
-    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    for (final c in [
-      name,
-      phone,
-      address,
-      landmark,
-      note,
-    ]) {
-      c.dispose();
-    }
-
+    _name.dispose();
+    _phone.dispose();
+    _address.dispose();
     super.dispose();
   }
 
-  void invalidate() {
-    if (quote != null) {
-      setState(() => quote = null);
+  CheckoutJson? get _selectedZone {
+    for (final zone in widget.zones) {
+      if (_id(zone['id']) == _area) return zone;
     }
+    return null;
   }
 
-  Map<String, dynamic> get delivery => {
-    'name': name.text.trim(),
-    'phone': normalized(phone.text),
-    'zoneId': zoneId,
-    'address': address.text.trim(),
-    'landmark': landmark.text.trim(),
-    'note': note.text.trim(),
-  };
+  int get _subtotal =>
+      widget.lines.fold<int>(0, (sum, line) => sum + line.subtotal);
 
-  Future<void> savedAddresses() async {
-    final choice = await shopSheet<Map<String, dynamic>>(
-      Obx(
-            () => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Saved delivery address',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-              ),
+  InputDecoration _input(String label, IconData icon, {String? hint}) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: Icon(icon),
+      alignLabelWithHint: true,
+      filled: true,
+      fillColor: const Color(0xFFF8FAFD),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: Color(0xFFDDE5F1)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _blue, width: 1.5),
+      ),
+    );
+  }
+
+  Future<void> _review() async {
+    if (_checking || !_form.currentState!.validate()) return;
+    final area = _area;
+    if (area == null || widget.lines.isEmpty) return;
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _checking = true;
+      _error = '';
+    });
+
+    try {
+      final data = await widget.loadStore(area);
+      if (!mounted) return;
+
+      final rawZones = data['zones'];
+      final rawItems = data['items'];
+      if (rawZones is! List || rawItems is! List) {
+        throw const FormatException('স্টোরের তথ্য পাওয়া যায়নি। আবার চেষ্টা করুন।');
+      }
+
+      CheckoutJson? zone;
+      for (final z in rawZones.whereType<CheckoutJson>()) {
+        if (_id(z['id']) == area) {
+          zone = z;
+          break;
+        }
+      }
+
+      if (zone == null) {
+        throw const FormatException(
+          'এই ইউনিয়নে এখন ডেলিভারি বন্ধ। কার্টে ফিরে আবার ঠিকানা দিন।',
+        );
+      }
+
+      final packs = <String, CheckoutJson>{
+        for (final row in rawItems.whereType<CheckoutJson>())
+          '${row['pack']}': row,
+      };
+
+      final cart = <String, dynamic>{};
+      final summary = <String>[];
+      final fee = _minor(zone['fee']);
+      var productsTotal = 0;
+
+      for (final line in widget.lines) {
+        final packId = '${line.variantId}';
+        final pack = packs[packId];
+
+        if (pack == null || 'mysql:${pack['product']}' != line.productId) {
+          throw FormatException('${line.name} এই ইউনিয়নে পাওয়া যাচ্ছে না।');
+        }
+
+        final stock = _id(pack['stock']);
+        if (line.qty < 1 || line.qty > 99 || stock < line.qty) {
+          throw FormatException(
+            '${line.name}: স্টকে আছে $stock প্যাক। কার্টে ফিরে পরিমাণ ঠিক করুন।',
+          );
+        }
+
+        final price = _minor(pack['price']);
+        final amount = price * line.qty;
+        productsTotal += amount;
+
+        cart[packId] = {'qty': line.qty, 'priceMinor': price};
+
+        final packName = '${pack['label'] ?? ''}'.trim();
+        final title = packName.isEmpty ? line.name : '${line.name} · $packName';
+        summary.add('$title × ${line.qty} = ${money(amount)}');
+
+        if (price != line.price) {
+          summary.add('প্রতি প্যাকের দাম বদলেছে: ${money(line.price)} → ${money(price)}');
+        }
+      }
+
+      final name = _name.text.trim();
+      final phone = _normalPhone(_phone.text);
+      final address = _address.text.trim();
+
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('অর্ডারটি দেখে নিন'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(phone),
+                Text('$address, ${zone!['name']}'),
+                const Divider(height: 24),
+                for (final text in summary)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(text),
+                  ),
+                const Divider(height: 24),
+                totalRow('পণ্যের দাম', productsTotal),
+                totalRow('ডেলিভারি', fee),
+                const SizedBox(height: 6),
+                totalRow('সর্বমোট', productsTotal + fee, bold: true),
+              ],
             ),
-            if (shop.addresses.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 18),
-                child: Text(
-                  'প্রথম সফল order-এর address এখানে সেভ হবে।',
-                ),
-              ),
-            for (var i = 0; i < shop.addresses.length; i++)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${shop.addresses[i]['name']} · '
-                      '${shop.addresses[i]['phone']}',
-                ),
-                subtitle: Text(
-                  '${shop.addresses[i]['address']}',
-                ),
-                onTap: () => Get.back(
-                  result: shop.addresses[i],
-                ),
-                trailing: IconButton(
-                  tooltip: 'Address মুছুন',
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: shop.busy.value
-                      ? null
-                      : () => guarded(() async {
-                    if (await confirm(
-                      'Address মুছবেন?',
-                      'শুধু saved address মুছবে। '
-                          'আগের order বদলাবে না।',
-                    )) {
-                      await shop.deleteAddress(i);
-                    }
-                  }),
-                ),
-              ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('ফিরে যান'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('অর্ডার নিশ্চিত করুন'),
+            ),
           ],
         ),
-      ),
-    );
+      );
 
-    if (choice == null || !mounted) return;
+      if (!mounted || accepted != true) return;
 
-    setState(() {
-      name.text = '${choice['name'] ?? ''}';
-      phone.text = '${choice['phone'] ?? ''}';
-      address.text = '${choice['address'] ?? ''}';
-      landmark.text = '${choice['landmark'] ?? ''}';
-      note.text = '${choice['note'] ?? ''}';
-
-      zoneId = shop.config.value?.zones.any(
-            (z) => z['id'] == choice['zoneId'],
-      ) ==
-          true
-          ? choice['zoneId'] as String
-          : null;
-
-      quote = null;
-    });
+      // কার্ট এই request সেভ করে mobile.php?a=place-এ একবার পাঠাবে।
+      Navigator.pop<CheckoutJson>(context, {
+        'key': _attemptKey(),
+        'name': name,
+        'phone': phone,
+        'address': address,
+        'area': area,
+        'feeMinor': fee,
+        'cart': cart,
+      });
+    } on FormatException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _error = 'সর্বশেষ দাম ও স্টক যাচাই করা যায়নি। আবার চেষ্টা করুন।');
+      }
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
   }
 
-  Future<void> verify() => guarded(() async {
-    if (!form.currentState!.validate()) return;
-
-    if (!acceptedIdentity || !acceptedPolicies) {
-      throw StateError(
-        'Privacy/Terms এবং anonymous identity-এর '
-            'তথ্য পড়ে সম্মতি দিন।',
-      );
-    }
-
-    FocusManager.instance.primaryFocus?.unfocus();
-
-    final q = await shop.quote(delivery);
-
-    if (mounted) {
-      setState(() => quote = q);
-    }
-  });
-
-  Future<void> submit() => guarded(() async {
-    if (shop.locked) {
-      final id = await shop.place({});
-
-      Get.off(
-            () => OrderDetailsScreen(
-          orderId: id,
-          showConfirmation: true,
-        ),
-      );
-      return;
-    }
-
-    if (quote == null ||
-        !form.currentState!.validate() ||
-        !acceptedIdentity ||
-        !acceptedPolicies) {
-      return;
-    }
-
-    final q = quote!;
-
-    final agreed = await confirm(
-      'অর্ডারের অনুরোধ নিশ্চিত করুন',
-      '${q['demoMode'] == true ? 'DEMO ORDER • বাস্তব delivery নয়\n' : ''}'
-          'Cash on Delivery\n'
-          'মোট ${money(number(q['totalMinor']))}\n\n'
-          'Delivery: ${address.text}\n\n'
-          'জমা হলে stock সংরক্ষিত হবে। '
-          'দোকান delivery যাচাই করে confirm করবে।',
-      action: 'অনুরোধ জমা দিন',
-    );
-
-    if (!agreed) return;
-
-    final id = await shop.place(q);
-
-    Get.off(
-          () => OrderDetailsScreen(
-        orderId: id,
-        showConfirmation: true,
-      ),
-    );
-  });
-
-  Future<void> abandon() => guarded(() async {
-    final agreed = await confirm(
-      'Attempt যাচাই করে বন্ধ করুন',
-      'Order হয়ে থাকলে সেই order খুলবে। '
-          'না হলে নতুন তথ্য দিয়ে আবার যাচাই করা যাবে।',
-    );
-
-    if (!agreed) return;
-
-    final id = await shop.abandon();
-
-    if (id != null) {
-      Get.off(
-            () => OrderDetailsScreen(
-          orderId: id,
-          showConfirmation: true,
-        ),
-      );
-    } else if (mounted) {
-      setState(() => quote = null);
-    }
-  });
-
-  Widget field(
-      TextEditingController controller,
-      String label, {
-        int min = 0,
-        int max = 160,
-        int lines = 1,
-        TextInputType? keyboard,
-      }) =>
-      Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: TextFormField(
-          controller: controller,
-          maxLength: max,
-          minLines: lines,
-          maxLines: lines,
-          keyboardType: keyboard,
-          onChanged: (_) => invalidate(),
-          decoration: InputDecoration(
-            labelText: label,
-            counterText: '',
-          ),
-          validator: (v) => (v ?? '').trim().length < min
-              ? '$label সঠিকভাবে লিখুন।'
-              : null,
-        ),
-      );
-
   @override
-  Widget build(BuildContext context) => ShopPage(
-    title: 'Checkout',
-    body: Obx(() {
-      final cfg = shop.config.value;
-      final zones = cfg?.zones ?? [];
-      final locked = shop.locked || shop.busy.value;
+  Widget build(BuildContext context) {
+    final zone = _selectedZone;
+    final fee = zone == null ? null : _minor(zone['fee']);
 
-      return ListView(
-        padding: const EdgeInsets.all(18),
-        children: [
-          if (shop.locked)
-            ShopBox(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'আগের attempt-এর ফল নিশ্চিত করুন',
-                    style: TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const Text(
-                    'নতুন order-এর আগে আগের attempt-এর ফল যাচাই করুন।',
-                  ),
-                  TextButton(
-                    onPressed: shop.busy.value ? null : abandon,
-                    child: const Text(
-                      'যাচাই করে attempt বন্ধ করুন',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 12),
-          ShopBox(
-            child: AbsorbPointer(
-              absorbing: locked,
-              child: Form(
-                key: form,
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F8FD),
+      appBar: AppBar(
+        title: const Text('চেকআউট'),
+        backgroundColor: const Color(0xFFF5F8FD),
+        foregroundColor: _ink,
+      ),
+      body: SafeArea(
+        child: Form(
+          key: _form,
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+            children: [
+              ShopBox(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Delivery information',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
+                    const Text(
+                      'ডেলিভারির ঠিকানা',
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'যিনি পণ্য গ্রহণ করবেন, তাঁর তথ্য দিন।',
+                      style: TextStyle(color: _muted),
+                    ),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      controller: _name,
+                      enabled: !_checking,
+                      maxLength: 100,
+                      autofillHints: const [AutofillHints.name],
+                      textInputAction: TextInputAction.next,
+                      decoration: _input('প্রাপকের নাম', Icons.person_outline),
+                      validator: (v) => (v ?? '').trim().isEmpty
+                          ? 'প্রাপকের নাম লিখুন।'
+                          : null,
+                    ),
+                    const SizedBox(height: 6),
+                    TextFormField(
+                      controller: _phone,
+                      enabled: !_checking,
+                      keyboardType: TextInputType.phone,
+                      autofillHints: const [AutofillHints.telephoneNumber],
+                      textInputAction: TextInputAction.next,
+                      decoration: _input('মোবাইল নম্বর', Icons.phone_outlined),
+                      validator: (v) => RegExp(r'^01[3-9][0-9]{8}$')
+                          .hasMatch(_normalPhone(v ?? ''))
+                          ? null
+                          : 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন।',
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<int>(
+                      initialValue: _area,
+                      isExpanded: true,
+                      decoration: _input('ডেলিভারি ইউনিয়ন', Icons.map_outlined),
+                      items: [
+                        for (final z in widget.zones)
+                          DropdownMenuItem<int>(
+                            value: _id(z['id']),
+                            child: Text(
+                              '${z['name']}',
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Saved addresses',
-                          onPressed: savedAddresses,
-                          icon: const Icon(
-                            Icons.bookmark_outline,
-                          ),
-                        ),
                       ],
-                    ),
-                    const SizedBox(height: 12),
-                    field(
-                      name,
-                      'আপনার নাম',
-                      min: 2,
-                      max: 80,
-                    ),
-                    TextFormField(
-                      controller: phone,
-                      keyboardType: TextInputType.phone,
-                      maxLength: 18,
-                      onChanged: (_) => invalidate(),
-                      decoration: const InputDecoration(
-                        labelText: 'মোবাইল নম্বর',
-                        counterText: '',
-                      ),
-                      validator: (v) =>
-                      RegExp(r'^(?:\+88)?01[3-9]\d{8}$')
-                          .hasMatch(
-                        normalized(v ?? '').replaceAll(
-                          RegExp(r'[\s()-]'),
-                          '',
-                        ),
-                      )
+                      onChanged: _checking
                           ? null
-                          : 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।',
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      key: ValueKey(zoneId),
-                      initialValue: zoneId,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'ইউনিয়ন / Delivery এলাকা',
-                      ),
-                      items: zones
-                          .map(
-                            (z) => DropdownMenuItem(
-                          value: '${z['id']}',
-                          child: Text(
-                            '${z['label']}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      )
-                          .toList(),
-                      validator: (v) => v == null
-                          ? 'Delivery এলাকা নির্বাচন করুন।'
-                          : null,
-                      onChanged: (v) => setState(() {
-                        zoneId = v;
-                        quote = null;
+                          : (value) => setState(() {
+                        _area = value;
+                        _error = '';
                       }),
+                      validator: (v) => v == null ? 'ইউনিয়ন বেছে নিন।' : null,
                     ),
-                    if (zones.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(
-                          vertical: 10,
-                        ),
-                        child: Text(
-                          'Store-এর delivery এলাকা এখনো চালু হয়নি।',
-                          style: TextStyle(
-                            color: Colors.deepOrange,
-                          ),
-                        ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _address,
+                      enabled: !_checking,
+                      minLines: 2,
+                      maxLines: 4,
+                      maxLength: 400,
+                      autofillHints: const [AutofillHints.fullStreetAddress],
+                      decoration: _input(
+                        'পূর্ণ ঠিকানা',
+                        Icons.location_on_outlined,
+                        hint: 'গ্রাম, পাড়া, বাড়ি বা কাছের পরিচিত স্থান',
                       ),
-                    const SizedBox(height: 14),
-                    field(
-                      address,
-                      'পূর্ণ delivery address',
-                      min: 8,
-                      max: 400,
-                      lines: 3,
-                    ),
-                    field(
-                      landmark,
-                      'Landmark (optional)',
-                      max: 160,
-                    ),
-                    field(
-                      note,
-                      'Delivery note (optional)',
-                      max: 300,
-                      lines: 2,
-                    ),
-                    const Text(
-                      'GPS লাগে না। Order সফলভাবে জমা হলে '
-                          'stock সংরক্ষিত হবে। দোকান delivery '
-                          'যাচাই করে confirm করবে।',
-                      style: TextStyle(
-                        color: Colors.blueGrey,
-                      ),
+                      validator: (v) => (v ?? '').trim().length < 8
+                          ? 'পণ্য পৌঁছানোর জন্য আরেকটু বিস্তারিত ঠিকানা দিন।'
+                          : null,
                     ),
                   ],
                 ),
               ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          ShopBox(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'তোমার কেনাকাটা',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                for (final x in shop.cart)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 5,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${x.name}'
-                                '${x.variantName.isEmpty ? '' : ' (${x.variantName})'}'
-                                ' × ${x.qty}',
-                          ),
-                        ),
-                        Text(money(x.subtotal)),
-                      ],
-                    ),
-                  ),
-                const Divider(height: 24),
-                if (quote == null)
-                  const Text(
-                    'মোট টাকা পেতে নিচে বর্তমান দাম '
-                        'ও delivery charge যাচাই করুন।',
-                  )
-                else ...[
-                  totalRow(
-                    'Subtotal',
-                    number(quote!['subtotalMinor']),
-                  ),
-                  totalRow(
-                    'Delivery charge',
-                    number(quote!['deliveryMinor']),
-                  ),
-                  if (number(quote!['discountMinor']) > 0)
-                    totalRow(
-                      'Discount',
-                      -number(quote!['discountMinor']),
-                    ),
-                  const Divider(),
-                  totalRow(
-                    'Final total',
-                    number(quote!['totalMinor']),
-                    bold: true,
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          ShopBox(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    Icons.payments_outlined,
-                    color: shopBlue,
-                  ),
-                  title: Text('Cash on Delivery'),
-                  subtitle: Text(
-                    'পণ্য গ্রহণের সময় টাকা দিন।',
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: () => policies(cfg),
-                  icon: const Icon(Icons.policy_outlined),
-                  label: const Text(
-                    'Delivery ও return policy',
-                  ),
-                ),
-                Wrap(
-                  spacing: 8,
+              const SizedBox(height: 12),
+              ShopBox(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextButton(
-                      onPressed: () => openPolicy(
-                        'privacy',
-                        'Privacy Policy',
-                      ),
-                      child: const Text('Privacy Policy'),
+                    const Text(
+                      'আপনার কেনাকাটা',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                     ),
-                    TextButton(
-                      onPressed: () => openPolicy(
-                        'terms',
-                        'Terms of Use',
+                    const SizedBox(height: 12),
+                    for (final line in widget.lines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${line.name}'
+                                    '${line.variantName.isEmpty ? '' : ' · ${line.variantName}'}'
+                                    ' × ${line.qty}',
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(money(line.subtotal)),
+                          ],
+                        ),
                       ),
-                      child: const Text('Terms of Use'),
-                    ),
-                    TextButton(
-                      onPressed: () => openPolicy(
-                        'deletion',
-                        'Data deletion',
-                      ),
-                      child: const Text('Data deletion'),
-                    ),
+                    const Divider(height: 18),
+                    totalRow('পণ্যের দাম', _subtotal),
+                    const SizedBox(height: 6),
+                    if (fee == null)
+                      const Text('ইউনিয়ন বেছে নিলে ডেলিভারি চার্জ দেখাবে।')
+                    else ...[
+                      totalRow('ডেলিভারি চার্জ', fee),
+                      const Divider(height: 18),
+                      totalRow('আনুমানিক মোট', _subtotal + fee, bold: true),
+                    ],
                   ],
                 ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: acceptedPolicies,
-                  onChanged: locked
-                      ? null
-                      : (value) => setState(() {
-                    acceptedPolicies = value ?? false;
-                  }),
-                  title: const Text(
-                    'অর্ডারের শর্ত ও তথ্য ব্যবহারের বিবরণ বুঝেছি।',
-                  ),
-                  subtitle: const Text(
-                    'নাম, ফোন ও ঠিকানা order processing '
-                        'এবং delivery-এর জন্য store ও সংশ্লিষ্ট '
-                        'delivery কর্মীর কাছে যাবে।',
+              ),
+              if (_error.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    _error,
+                    style: const TextStyle(color: Color(0xFFB42318)),
                   ),
                 ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: acceptedIdentity,
-                  onChanged: locked
-                      ? null
-                      : (v) => setState(
-                        () => acceptedIdentity = v ?? false,
-                  ),
-                  title: const Text(
-                    'এই device-এর anonymous identity দিয়ে order হবে।',
-                  ),
-                  subtitle: const Text(
-                    'App data মুছলে বা reinstall করলে নিজের '
-                        'order-এর access হারাতে পারেন। Order number '
-                        'ও ফোন দিয়ে account উদ্ধার করা যাবে না।',
-                  ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _checking || widget.lines.isEmpty ? null : _review,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _blue,
+                  minimumSize: const Size.fromHeight(48),
                 ),
-              ],
-            ),
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: Text(_checking ? 'যাচাই হচ্ছে…' : 'অর্ডার দেখে নিন'),
+              ),
+            ],
           ),
-          const SizedBox(height: 24),
-        ],
-      );
-    }),
-    bottom: Obx(
-          () => FilledButton(
-        onPressed: shop.busy.value ||
-            !shop.localReady.value ||
-            shop.cart.isEmpty
-            ? null
-            : shop.locked
-            ? submit
-            : quote == null
-            ? verify
-            : submit,
-        child: Text(
-          shop.busy.value
-              ? 'যাচাই হচ্ছে…'
-              : shop.locked
-              ? 'একই attempt আবার চেষ্টা করুন'
-              : quote == null
-              ? 'Delivery ও মোট টাকা যাচাই করুন'
-              : 'অনুরোধ জমা দিন · '
-              '${money(number(quote!['totalMinor']))}',
         ),
       ),
-    ),
-  );
+    );
+  }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -11,7 +12,6 @@ import '../../services/community_service.dart';
 import '../03_notifications/notifications_screen.dart';
 import '../04_menu/menu_screen.dart';
 import '../05_search_results/search_results_screen.dart';
-import '../07_service_details/service_details_screen.dart';
 import '../08_saved_items/saved_items_screen.dart';
 import '../09_shopping_home/shopping_home_screen.dart';
 import '../10_product_details/product_details_screen.dart';
@@ -30,14 +30,15 @@ class HomeFeed<T> {
   final loading = true.obs;
   final error = ''.obs;
 
-  void begin(bool clear) {
+  void begin({bool clear = false}) {
     if (clear) items.clear();
     error.value = '';
     loading.value = true;
   }
 
-  void done(Iterable<T> rows) {
-    items.assignAll(rows);
+  void done(Iterable<T> values) {
+    items.assignAll(values);
+    error.value = '';
     loading.value = false;
   }
 
@@ -52,42 +53,58 @@ class HomeController extends GetxController {
   final searchInput = TextEditingController();
 
   final quick = HomeFeed<RowData>();
-  final services = HomeFeed<RowData>();
   final products = HomeFeed<RowData>();
   final news = HomeFeed<LocalUpdate>();
-
   final areas = <int, String>{};
 
-  // 0 থাকলে নিচের বাংলা নামগুলো দিয়ে ঘোষণার মেনু খুঁজবে।
-  // মেনুর নাম আলাদা হলে এখানে তোমার আসল list menu ID বসাও।
-  static const int newsMenuId = 0;
+  static const newsMenuId = 0;
+  static const _newsTitles = {
+    'ডিমলার খবর ও ঘোষণা',
+    'স্থানীয় খবর ও ঘোষণা',
+    'খবর ও ঘোষণা',
+    'ঘোষণা',
+  };
 
-  late final Worker _areaWorker;
-  int _version = 0;
+  final _random = Random();
+  late final Worker _areaWatcher;
+  List<int> _featuredIds = [];
   String? _lastArea;
+  int _version = 0;
+
+  bool get busy =>
+      quick.loading.value || products.loading.value || news.loading.value;
 
   bool _current(int version) => !isClosed && version == _version;
 
   @override
   void onInit() {
     super.onInit();
-    _areaWorker = ever<String>(
+    _areaWatcher = ever<String>(
       community.selectedArea,
           (_) => unawaited(refresh()),
     );
     unawaited(refresh());
   }
 
-  Future<void> refresh() async {
+  // হাতে রিফ্রেশ বা ইউনিয়ন বদলালে নতুন পণ্য বেছে নেওয়া হয়।
+  Future<void> refresh() => _load(reshuffle: true);
+
+  // পেছনে আপডেট হলে একই পণ্যের দাম/স্টক আপডেট হয়।
+  Future<void> refreshInBackground() async {
+    if (!busy) await _load(reshuffle: false);
+  }
+
+  Future<void> _load({required bool reshuffle}) async {
     final version = ++_version;
     final areaName = community.selectedArea.value;
-    final changedArea = _lastArea != areaName;
+    final areaChanged = _lastArea != areaName;
     _lastArea = areaName;
 
-    quick.begin(false);
-    services.begin(changedArea);
-    products.begin(changedArea);
-    news.begin(changedArea);
+    if (areaChanged) _featuredIds = [];
+
+    quick.begin();
+    products.begin(clear: areaChanged);
+    news.begin(clear: areaChanged);
 
     try {
       final catalog = await ServiceApi.catalog();
@@ -102,154 +119,105 @@ class HomeController extends GetxController {
         );
 
       final pinned = catalog.menus.where((m) => homeFlag(m['home']));
-      final shortcuts = pinned.isNotEmpty
+      final homeMenus = pinned.isNotEmpty
           ? pinned
           : catalog.menus.where((m) => homeInt(m['parent']) == 0);
 
-      quick.done(shortcuts.take(8));
+      quick.done(homeMenus.take(8));
 
-      final matches = areas.keys.where((id) => areas[id] == areaName);
-      if (areaName != 'সব এলাকা' && matches.isEmpty) {
-        const message = 'এই এলাকা এখন তালিকায় নেই। উপরে ইউনিয়ন বদলান।';
-        services.fail(message);
-        products.fail(message);
-        news.fail(message);
-        return;
+      int zone = 0;
+      if (areaName != 'সব এলাকা') {
+        final matches = areas.entries.where((e) => e.value == areaName);
+        if (matches.isEmpty) {
+          const message = 'এই ইউনিয়নটি পাওয়া যায়নি। উপরে এলাকা বদলান।';
+          products.fail(message);
+          news.fail(message);
+          return;
+        }
+        zone = matches.first.key;
       }
 
-      final zone = areaName == 'সব এলাকা' ? 0 : matches.first;
-      final lists = catalog.menus.where((m) => m['kind'] == 'list');
+      final newsMenus = catalog.menus.where((menu) {
+        if (menu['kind'] != 'list') return false;
+        if (newsMenuId > 0) return homeInt(menu['id']) == newsMenuId;
+        return _newsTitles.contains(homeText(menu['title']));
+      }).toList();
 
-      await Future.wait([
-        _fill(
-          services,
-          version,
-              () => _preview(
-            lists.where((m) => !_isNews(m)).toList(),
-            zone,
-            version,
-          ),
-        ),
-        _fill(products, version, () => _loadStore(zone)),
-        _fill(news, version, () async {
-          final rows = await _preview(
-            lists.where(_isNews).toList(),
-            zone,
-            version,
-          );
-          return rows.map(_toNotice).toList();
-        }),
+      await Future.wait<void>([
+        _loadProducts(zone, version, reshuffle || areaChanged),
+        _loadNews(newsMenus, zone, version),
       ]);
     } catch (_) {
       if (!_current(version)) return;
-
-      const message = 'মেনু ও ইউনিয়ন লোড হয়নি। API সংযোগ দেখে আবার চেষ্টা করুন।';
+      const message = 'তথ্য লোড হয়নি। আবার চেষ্টা করুন।';
       quick.fail(message);
-      services.fail(message);
       products.fail(message);
       news.fail(message);
     }
   }
 
-  bool _isNews(RowData menu) {
-    if (newsMenuId > 0) return homeInt(menu['id']) == newsMenuId;
-
-    return const {
-      'ডিমলার খবর ও ঘোষণা',
-      'স্থানীয় খবর ও ঘোষণা',
-      'খবর ও ঘোষণা',
-      'ঘোষণা',
-    }.contains(homeText(menu['title']));
-  }
-
-  Future<void> _fill<T>(
-      HomeFeed<T> feed,
-      int version,
-      Future<List<T>> Function() read,
-      ) async {
+  Future<void> _loadProducts(int zone, int version, bool reshuffle) async {
     try {
-      final rows = await read();
-      if (_current(version)) feed.done(rows);
+      final catalog = await _storeProducts(zone);
+      if (!_current(version)) return;
+
+      // একই পণ্যের কয়েকটি প্যাক থাকলেও হোমে একটি কার্ড দেখাবে।
+      final selected = <int>[
+        if (!reshuffle)
+          for (final id in _featuredIds)
+            if (catalog.containsKey(id)) id,
+      ];
+
+      final candidates = catalog.keys
+          .where((id) => !selected.contains(id))
+          .toList()
+        ..shuffle(_random);
+
+      selected.addAll(candidates.take(4 - selected.length));
+      _featuredIds = selected;
+      products.done(selected.map((id) => catalog[id]!));
     } catch (_) {
-      if (_current(version)) feed.fail('তথ্য লোড হয়নি। আবার চেষ্টা করুন।');
+      if (_current(version)) products.fail('স্টোরের পণ্য লোড হয়নি।');
     }
   }
 
-  // Home-এ ৩টি কার্ড প্রয়োজন। একসঙ্গে সর্বোচ্চ ৩টি মেনু পড়বে।
-  Future<List<RowData>> _preview(
-      List<RowData> menus,
-      int zone,
-      int version,
-      ) async {
-    final result = <RowData>[];
-
-    for (var i = 0;
-    i < menus.length && result.length < 3 && _current(version);
-    i += 3) {
-      final batch = await Future.wait(
-        menus.skip(i).take(3).map((menu) async {
-          final page = await ServiceApi.entries(
-            menuId: homeInt(menu['id']),
-            areaId: zone,
-          );
-
-          return page.items.take(3).map(
-                (row) => <String, dynamic>{...row, '_menu': menu},
-          );
-        }),
-      );
-
-      for (final rows in batch) {
-        result.addAll(rows);
-      }
-    }
-
-    return result.take(3).toList();
-  }
-
-  Future<List<RowData>> _loadStore(int zone) async {
-    // ServiceApi-র একই base URL ব্যবহার করে; দ্বিতীয়বার IP বসাতে হবে না।
-    final uri = ServiceApi.menuIcon(1).resolve('mobile.php').replace(
+  Future<Map<int, RowData>> _storeProducts(int zone) async {
+    final url = ServiceApi.menuIcon(1).resolve('mobile.php').replace(
       queryParameters: {'a': 'store', 'area': '$zone'},
     );
 
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 6);
 
-    Future<List<RowData>> read() async {
-      final request = await client.getUrl(uri);
+    Future<Map<int, RowData>> read() async {
+      final request = await client.getUrl(url);
       request.followRedirects = false;
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
 
       final response = await request.close();
-      if (response.statusCode != 200) {
-        throw HttpException('Store HTTP ${response.statusCode}');
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException('HTTP ${response.statusCode}', uri: url);
       }
 
       final body = jsonDecode(await utf8.decoder.bind(response).join());
       if (body is! Map || body['items'] is! List) {
-        throw const FormatException('Store items পাওয়া যায়নি');
+        throw const FormatException('Store items missing');
       }
 
-      final byProduct = <int, RowData>{};
+      final byId = <int, RowData>{};
 
       for (final row in body['items'] as List) {
-        if (row is! RowData) throw const FormatException('Invalid pack');
-
+        if (row is! RowData) continue;
         final id = homeInt(row['product']);
         if (id <= 0 || homeText(row['name']).isEmpty) continue;
 
-        final previous = byProduct[id];
-
-        // একই পণ্যের প্রথম প্যাকটি রাখে। সেটি stock-out হলে
-        // পরের available প্যাকের দাম, unit ও stock একসঙ্গে দেখায়।
-        if (previous == null ||
-            (homeInt(previous['stock']) <= 0 && homeInt(row['stock']) > 0)) {
-          byProduct[id] = row;
+        final current = byId[id];
+        if (current == null ||
+            (homeInt(current['stock']) <= 0 && homeInt(row['stock']) > 0)) {
+          byId[id] = row;
         }
       }
-
-      return byProduct.values.take(4).toList();
+      return byId;
     }
 
     try {
@@ -259,75 +227,70 @@ class HomeController extends GetxController {
     }
   }
 
-  LocalUpdate _toNotice(RowData row) {
+  Future<void> _loadNews(List<RowData> menus, int zone, int version) async {
+    try {
+      final updates = <LocalUpdate>[];
+      for (final menu in menus) {
+        if (!_current(version) || updates.length >= 3) break;
+        final page = await ServiceApi.entries(
+          menuId: homeInt(menu['id']),
+          areaId: zone,
+        );
+        for (final row in page.items.take(3 - updates.length)) {
+          updates.add(_notice(row, menu));
+        }
+      }
+      if (_current(version)) news.done(updates);
+    } catch (_) {
+      if (_current(version)) news.fail('ঘোষণা লোড হয়নি।');
+    }
+  }
+
+  LocalUpdate _notice(RowData row, RowData menu) {
     final fields = <String, String>{};
     final extra = row['extra'];
-
     if (extra is Map) {
       for (final e in extra.entries) {
         fields['${e.key}'.toLowerCase()] = homeText(e.value);
       }
-
-      final spec = row['_menu']['fields'];
-      if (spec is List) {
-        for (final f in spec.whereType<Map>()) {
+      final definitions = menu['fields'];
+      if (definitions is List) {
+        for (final f in definitions.whereType<Map>()) {
           fields[homeText(f['label'])] = homeText(extra[f['key']]);
         }
       }
     }
 
-    String pick(List<String> keys) => keys
-        .map((key) => fields[key] ?? '')
-        .firstWhere((s) => s.isNotEmpty, orElse: () => '');
+    String first(List<String> keys) {
+      for (final key in keys) {
+        final value = fields[key] ?? '';
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
 
-    final body = pick(['body', 'description', 'details', 'বিবরণ', 'বিস্তারিত']);
-
+    final body = first(['body', 'description', 'details', 'বিবরণ', 'বিস্তারিত']);
     return LocalUpdate(
       id: "mysql:${row['id']}",
       title: homeText(row['name']),
       body: body.isEmpty ? 'বিস্তারিত বিবরণ দেওয়া হয়নি।' : body,
-      label: homeText(row['_menu']['title']),
-      publishedAt: DateTime.tryParse(pick(['published_at', 'date', 'তারিখ'])),
+      label: homeText(menu['title']),
+      publishedAt: DateTime.tryParse(first(['published_at', 'date', 'তারিখ'])),
     );
   }
 
-  String serviceArea(RowData row) {
-    if (homeFlag(row['wide'])) return 'পুরো ডিমলা';
-    final ids = row['areas'];
-    if (ids is! List) return '';
-    return ids.map((id) => areas[homeInt(id)]).whereType<String>().join(' · ');
-  }
+  void openProduct(RowData p) => Get.to(
+        () => ProductDetailsScreen(productId: "mysql:${p['product']}"),
+    arguments: {
+      'source': 'mysql',
+      'productId': homeInt(p['product']),
+      'pack': p,
+    },
+  );
 
-  String photo(RowData row) {
-    if (!homeFlag(row['hasPhoto'])) return '';
-    return ServiceApi.profilePhoto(
-      homeInt(row['id']),
-      revision: homeInt(row['rev']),
-    ).toString();
-  }
-
-  void openMenu(RowData menu) => Get.to(
-        () => ServiceMenuScreen(menuId: "${menu['id']}"),
+  void openMenu(RowData m) => Get.to(
+        () => ServiceMenuScreen(menuId: "${m['id']}"),
     preventDuplicates: false,
-  );
-
-  void openService(RowData row) => Get.to(
-        () => ServiceDetailsScreen(serviceId: "mysql:${row['id']}"),
-    arguments: {
-      'source': 'mysql',
-      'entry': row,
-      'menu': row['_menu'],
-      'areaNames': Map<int, String>.of(areas),
-    },
-  );
-
-  void openProduct(RowData pack) => Get.to(
-        () => ProductDetailsScreen(productId: "mysql:${pack['product']}"),
-    arguments: {
-      'source': 'mysql',
-      'productId': homeInt(pack['product']),
-      'pack': pack,
-    },
   );
 
   void search() {
@@ -350,7 +313,7 @@ class HomeController extends GetxController {
   @override
   void onClose() {
     _version++;
-    _areaWorker.dispose();
+    _areaWatcher.dispose();
     searchInput.dispose();
     super.onClose();
   }

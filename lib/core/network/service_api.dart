@@ -124,6 +124,8 @@ abstract final class ServiceApi {
     required List<int> areaIds,
     required bool consent,
     Map<String, String> extra = const {},
+    String? photoBase64,
+    String address = '',
   }) async {
     final areas = areaIds.toSet().toList();
 
@@ -131,37 +133,36 @@ abstract final class ServiceApi {
         areas.isEmpty ||
         areas.length > 30 ||
         areas.any((id) => id < 1)) {
-      throw const ServiceApiException(
-        'মেনু ও সেবার ইউনিয়ন নির্বাচন করুন।',
-      );
+      throw const ServiceApiException('মেনু ও সেবার ইউনিয়ন নির্বাচন করুন।');
     }
 
     if (!consent) {
-      throw const ServiceApiException(
-        'নাম ও ফোন প্রকাশের সম্মতি প্রয়োজন।',
-      );
+      throw const ServiceApiException('তথ্য প্রকাশের সম্মতি প্রয়োজন।');
     }
 
-    final data = await _request(
-      _url('submit'),
-      body: {
-        'menu': menuId,
-        'name': name.trim(),
-        'phone': phone.trim(),
-        'areas': areas,
-        'consent': consent,
-        'extra': extra,
-      },
-    );
+    final data = await _request(_url('submit'), body: {
+      'menu': menuId,
+      'name': name.trim(),
+      'phone': phone.trim(),
+      'areas': areas,
+      'consent': consent,
+      'extra': extra,
+      if (photoBase64 != null) 'profilePhoto': photoBase64,
+      if (address.trim().isNotEmpty)
+        'profileFields': [
+          {'label': 'ঠিকানা', 'value': address.trim()},
+        ],
+    });
 
     final id = int.tryParse('${data['id']}');
-
     if (data['ok'] != true || id == null || id < 1) {
-      throw const ServiceApiException('জমার স্বীকৃতি পাওয়া যায়নি।');
+      throw const ServiceApiException('আবেদন জমার স্বীকৃতি পাওয়া যায়নি।');
     }
-
     return id;
   }
+
+
+
 
   static List<ServiceJson> _rows(dynamic value) {
     if (value is! List || value.any((row) => row is! ServiceJson)) {
