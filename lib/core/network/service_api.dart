@@ -31,7 +31,7 @@ abstract final class ServiceApi {
   // এখানে api.php নয়, যে ফোল্ডারে api.php আছে তার URL দেবে।
   static const baseUrl = String.fromEnvironment(
     'DIMLA_API',
-    defaultValue: 'http://10.0.2.2/smart_dimla_admin/',
+    defaultValue: 'https://programmerraj.site/smart_dimla_admin/',
   );
 
   static Uri _url(

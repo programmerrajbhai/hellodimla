@@ -9,21 +9,99 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/network/service_api.dart';
 
-typedef _J = Map<String, dynamic>;
+typedef _Json = Map<String, dynamic>;
 
-const _blue = Color(0xFF2258CB);
-const _navy = Color(0xFF16366C);
-const _bg = Color(0xFFF4F7FC);
+const _navy = Color(0xFF122E58);
+const _blue = Color(0xFF1956BD);
+const _paleBlue = Color(0xFFEBF3FF);
+const _background = Color(0xFFF4F7FC);
+const _border = Color(0xFFD9E4F2);
+const _muted = Color(0xFF50647B);
 
 int _id(dynamic value) => int.tryParse('$value') ?? 0;
-
 bool _yes(dynamic value) => value == true || _id(value) == 1;
+String _text(dynamic value) => value?.toString().trim() ?? '';
 
-List<Map> _rows(dynamic value) =>
-    value is List ? value.whereType<Map>().toList() : [];
+List<_Json> _rows(dynamic value) {
+  if (value is! List) return [];
+  return [
+    for (final item in value)
+      if (item is Map) Map<String, dynamic>.from(item),
+  ];
+}
 
-List<String> _options(Map field) =>
-    (field['options'] as List? ?? []).whereType<String>().toList();
+List<String> _options(_Json field) {
+  final values = field['options'];
+  if (values is! List) return [];
+  return values.map(_text).where((s) => s.isNotEmpty).toSet().toList();
+}
+
+String _normalizePhone(String value) {
+  return value
+      .replaceAllMapped(
+    RegExp('[০-৯]'),
+        (m) => '০১২৩৪৫৬৭৮৯'.indexOf(m[0]!).toString(),
+  )
+      .replaceAll(RegExp(r'[\s()-]'), '');
+}
+
+String _formTitle(_Json menu) {
+  final title = _text(menu['title']).toLowerCase();
+
+  if (title.contains('blood') || title.contains('রক্ত')) {
+    return 'রক্তদাতার তথ্য দিন';
+  }
+
+  if (title.contains('ambulance') ||
+      title.contains('অ্যাম্বুলেন্স') ||
+      title.contains('এম্বুলেন্স')) {
+    return 'অ্যাম্বুলেন্সের তথ্য দিন';
+  }
+
+  return 'সেবার তথ্য দিন';
+}
+
+BoxDecoration _cardDecoration() => BoxDecoration(
+  color: Colors.white,
+  borderRadius: BorderRadius.circular(16),
+  border: Border.all(color: _border),
+);
+
+InputDecoration _input(String label, IconData icon, {String? hint}) {
+  OutlineInputBorder edge(Color color, [double width = 1]) {
+    return OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(color: color, width: width),
+    );
+  }
+
+  return InputDecoration(
+    labelText: label,
+    hintText: hint,
+    prefixIcon: Icon(icon, size: 21, color: _blue),
+    filled: true,
+    fillColor: Colors.white,
+    border: edge(_border),
+    enabledBorder: edge(_border),
+    focusedBorder: edge(_blue, 1.6),
+    errorMaxLines: 2,
+  );
+}
+
+ButtonStyle _primaryButton() => FilledButton.styleFrom(
+  backgroundColor: _blue,
+  foregroundColor: Colors.white,
+  minimumSize: const Size(0, 48),
+  shape: RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(12),
+  ),
+  textStyle: const TextStyle(
+    fontSize: 16,
+    fontWeight: FontWeight.w700,
+  ),
+);
+
+// ───────────────────── সেবার তালিকা ─────────────────────
 
 class ServiceListPanel extends StatefulWidget {
   const ServiceListPanel({
@@ -33,7 +111,7 @@ class ServiceListPanel extends StatefulWidget {
     required this.areas,
   });
 
-  final _J menu;
+  final Map<String, dynamic> menu;
   final int zone;
   final Map<int, String> areas;
 
@@ -42,94 +120,124 @@ class ServiceListPanel extends StatefulWidget {
 }
 
 class _ServiceListState extends State<ServiceListPanel> {
-  List<_J> entries = [];
-  final filters = <String, String>{};
-
-  Timer? timer;
-  bool loading = false;
-  String error = '';
+  List<_Json> _entries = [];
+  final Map<String, String> _filters = {};
+  Timer? _timer;
+  bool _loading = false;
+  String _error = '';
+  int _generation = 0;
 
   @override
   void initState() {
     super.initState();
-    load();
+    _load();
 
-    timer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted &&
-          TickerMode.of(context) &&
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted) return;
+      if (TickerMode.of(context) &&
           ModalRoute.of(context)?.isCurrent == true &&
           WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        load();
+        _load();
       }
     });
   }
 
   @override
-  void dispose() {
-    timer?.cancel();
-    super.dispose();
-  }
+  void didUpdateWidget(covariant ServiceListPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
 
-  Future<void> load() async {
-    if (loading) return;
-
-    setState(() {
-      loading = true;
-      error = '';
-    });
-
-    try {
-      final rows = <int, _J>{};
-      int? cursor = 0;
-
-      while (mounted && cursor != null) {
-        final page = await ServiceApi.entries(
-          menuId: _id(widget.menu['id']),
-          areaId: widget.zone,
-          after: cursor,
-        );
-
-        for (final row in page.items) {
-          rows[_id(row['id'])] = row;
-        }
-        cursor = page.nextAfter;
-      }
-
-      if (!mounted) return;
-
-      final result = rows.values.toList()
-        ..sort((a, b) => '${a['name']}'.compareTo('${b['name']}'));
-
-      setState(() => entries = result);
-    } catch (e) {
-      if (mounted) setState(() => error = '$e');
-    } finally {
-      if (mounted) setState(() => loading = false);
+    if (_id(oldWidget.menu['id']) != _id(widget.menu['id']) ||
+        oldWidget.zone != widget.zone) {
+      _generation++;
+      _loading = false;
+      _entries = [];
+      _filters.clear();
+      _load();
     }
   }
 
-  String areaOf(_J row) {
-    if (_yes(row['wide'])) return 'পুরো ডিমলা';
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
-    return (row['areas'] as List? ?? [])
+  Future<void> _load() async {
+    if (_loading) return;
+
+    final token = ++_generation;
+    final menuId = _id(widget.menu['id']);
+    final areaId = widget.zone;
+
+    setState(() {
+      _loading = true;
+      _error = '';
+    });
+
+    try {
+      final result = <int, _Json>{};
+      int after = 0;
+
+      while (true) {
+        final page = await ServiceApi.entries(
+          menuId: menuId,
+          areaId: areaId,
+          after: after,
+        );
+
+        if (!mounted || token != _generation) return;
+
+        for (final entry in page.items) {
+          result[_id(entry['id'])] = entry;
+        }
+
+        final next = page.nextAfter;
+        if (next == null) break;
+        if (next <= after) {
+          throw const FormatException('তালিকার পরের অংশ লোড করা যায়নি।');
+        }
+        after = next;
+      }
+
+      final sorted = result.values.toList()
+        ..sort((a, b) => _text(a['name']).compareTo(_text(b['name'])));
+
+      setState(() => _entries = sorted);
+    } catch (e) {
+      if (mounted && token == _generation) {
+        setState(() => _error = '$e');
+      }
+    } finally {
+      if (mounted && token == _generation) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  String _areaOf(_Json entry) {
+    if (_yes(entry['wide'])) return 'পুরো ডিমলা';
+    final ids = entry['areas'];
+    if (ids is! List) return '';
+
+    return ids
         .map((id) => widget.areas[_id(id)])
         .whereType<String>()
         .join(' · ');
   }
 
-  Widget avatar(_J row) {
-    const fallback = Icon(Icons.person_outline, color: _blue);
+  Widget _avatar(_Json entry) {
+    const fallback = Icon(Icons.person_outline_rounded, color: _blue);
 
     return CircleAvatar(
       radius: 24,
-      backgroundColor: const Color(0xFFEDF3FF),
-      child: !_yes(row['hasPhoto'])
+      backgroundColor: _paleBlue,
+      child: !_yes(entry['hasPhoto'])
           ? fallback
           : ClipOval(
         child: Image.network(
           ServiceApi.profilePhoto(
-            _id(row['id']),
-            revision: _id(row['rev']),
+            _id(entry['id']),
+            revision: _id(entry['rev']),
           ).toString(),
           width: 48,
           height: 48,
@@ -140,80 +248,94 @@ class _ServiceListState extends State<ServiceListPanel> {
     );
   }
 
-  Future<void> openExternal(Uri uri) async {
+  Future<void> _openLink(Uri uri) async {
     try {
       if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
     } catch (_) {
-      // দেখানোর মতো অ্যাপ না থাকলে নিচে বার্তা দেখানো হবে।
+      // নিচে ব্যবহারকারীকে জানানো হবে।
     }
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ফোনে এই লিংকটি খোলা যায়নি।')),
-      );
-    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('এই ফোনে লিংকটি খোলা যায়নি।')),
+    );
   }
 
-  void details(_J row) {
-    final phone = '${row['phone'] ?? ''}';
-    final profile = _rows(row['profileFields']);
+  void _details(_Json entry) {
+    final phone = _text(entry['phone']);
+    final area = _areaOf(entry);
+    final extra = entry['extra'];
+    final profile = _rows(entry['profileFields']);
+
     final address = profile
-        .where((f) => f['label'] == 'ঠিকানা')
-        .map((f) => '${f['value']}')
-        .join(' ');
+        .where((f) => _text(f['label']) == 'ঠিকানা')
+        .map((f) => _text(f['value']))
+        .where((s) => s.isNotEmpty)
+        .join(', ');
 
     showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
       useSafeArea: true,
-      builder: (ctx) => SafeArea(
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      builder: (_) => SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(child: avatar(row)),
+              Center(child: _avatar(entry)),
               const SizedBox(height: 8),
               Text(
-                '${row['name']}',
+                _text(entry['name']),
                 textAlign: TextAlign.center,
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
-              ListTile(
-                leading: const Icon(Icons.place_outlined),
-                title: Text(areaOf(row)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.phone_outlined),
-                title: Text(phone),
-                onTap: phone.isEmpty
-                    ? null
-                    : () => openExternal(Uri(scheme: 'tel', path: phone)),
-              ),
-              for (final f in profile)
-                ListTile(
-                  title: Text('${f['label']}'),
-                  subtitle: Text('${f['value']}'),
+                style: const TextStyle(
+                  color: _navy,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
                 ),
-              for (final f in _rows(widget.menu['fields']))
-                if (row['extra']?[f['key']] != null)
-                  ListTile(
-                    title: Text('${f['label']}'),
-                    subtitle: Text("${row['extra'][f['key']]}"),
-                  ),
+              ),
+              if (area.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.place_outlined, color: _blue),
+                  title: Text(area),
+                ),
+              for (final field in profile)
+                ListTile(
+                  dense: true,
+                  title: Text(_text(field['label'])),
+                  subtitle: Text(_text(field['value'])),
+                ),
+              if (extra is Map)
+                for (final field in _rows(widget.menu['fields']))
+                  if (_text(extra[field['key']]).isNotEmpty)
+                    ListTile(
+                      dense: true,
+                      title: Text(_text(field['label'])),
+                      subtitle: Text(_text(extra[field['key']])),
+                    ),
               if (address.isNotEmpty)
                 OutlinedButton.icon(
+                  onPressed: () => _openLink(
+                    Uri.https('www.google.com', '/maps/search/', {
+                      'api': '1',
+                      'query': [
+                        address,
+                        if (area.isNotEmpty) area,
+                        'ডিমলা',
+                        'বাংলাদেশ',
+                      ].join(', '),
+                    }),
+                  ),
                   icon: const Icon(Icons.map_outlined),
                   label: const Text('ম্যাপে ঠিকানা দেখুন'),
-                  onPressed: () => openExternal(Uri.https(
-                    'www.google.com',
-                    '/maps/search/',
-                    {
-                      'api': '1',
-                      'query': '$address, ${areaOf(row)}, ডিমলা, বাংলাদেশ',
-                    },
-                  )),
+                ),
+              if (phone.isNotEmpty)
+                FilledButton.icon(
+                  style: _primaryButton(),
+                  onPressed: () => _openLink(Uri(scheme: 'tel', path: phone)),
+                  icon: const Icon(Icons.call_outlined),
+                  label: Text('কল করুন · $phone'),
                 ),
             ],
           ),
@@ -222,178 +344,251 @@ class _ServiceListState extends State<ServiceListPanel> {
     );
   }
 
-  Future<void> add() async {
-    final ok = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
+  Future<void> _openForm() async {
+    if (!widget.areas.keys.any((id) => id > 0)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ইউনিয়নের তালিকা পাওয়া যায়নি। মেনুটি আবার খুলুন।'),
+        ),
+      );
+      return;
+    }
+
+    final receipt = await Navigator.of(context).push<int>(
+      MaterialPageRoute<int>(
         builder: (_) => _SubmissionPage(
           menu: widget.menu,
-          areas: widget.areas,
           zone: widget.zone,
+          areas: widget.areas,
         ),
       ),
     );
 
-    if (mounted && ok == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('তথ্য জমা হয়েছে। অনুমোদনের পর তালিকায় দেখা যাবে।'),
+    if (!mounted || receipt == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 5),
+        content: Text('আবেদন #$receipt জমা হয়েছে। যাচাইয়ের পর প্রকাশ হবে।'),
+      ),
+    );
+  }
+
+  Widget _header() {
+    const fallback = Icon(Icons.contacts_outlined, color: _blue, size: 26);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_navy, _blue],
         ),
-      );
-    }
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: _yes(widget.menu['hasIcon'])
+                ? Image.network(
+              ServiceApi.menuIcon(
+                _id(widget.menu['id']),
+                revision: _id(widget.menu['rev']),
+              ).toString(),
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => fallback,
+            )
+                : fallback,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _text(widget.menu['title']),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  widget.areas[widget.zone] ?? 'সকল ইউনিয়ন',
+                  style: const TextStyle(color: Color(0xFFDEEAFF)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterField(_Json field) {
+    final key = _text(field['key']);
+    final options = _options(field);
+    final selected = _filters[key] ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: InputDecorator(
+        decoration: _input(_text(field['label']), Icons.tune_rounded),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            isExpanded: true,
+            isDense: true,
+            value: options.contains(selected) ? selected : '',
+            items: [
+              const DropdownMenuItem(value: '', child: Text('সব দেখুন')),
+              for (final option in options)
+                DropdownMenuItem(value: option, child: Text(option)),
+            ],
+            onChanged: (v) => setState(() => _filters[key] = v ?? ''),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _contactCard(_Json entry) {
+    final phone = _text(entry['phone']);
+    final area = _areaOf(entry);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      decoration: _cardDecoration(),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+        leading: _avatar(entry),
+        onTap: () => _details(entry),
+        title: Text(
+          _text(entry['name']),
+          style: const TextStyle(color: _navy, fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text([
+          if (area.isNotEmpty) area,
+          if (phone.isNotEmpty) phone,
+        ].join('\n')),
+        trailing: IconButton(
+          tooltip: 'কল করুন',
+          style: IconButton.styleFrom(
+            backgroundColor: _paleBlue,
+            foregroundColor: _blue,
+          ),
+          onPressed: phone.isEmpty
+              ? null
+              : () => _openLink(Uri(scheme: 'tel', path: phone)),
+          icon: const Icon(Icons.call_outlined),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final fields = _rows(widget.menu['fields']);
-
-    final list = entries.where((row) {
-      return fields.every((f) {
-        final selected = filters[f['key']];
-        return selected == null ||
-            !_options(f).contains(selected) ||
-            row['extra']?[f['key']] == selected;
+    final filtered = _entries.where((entry) {
+      final extra = entry['extra'];
+      return fields.every((field) {
+        final selected = _filters[_text(field['key'])] ?? '';
+        return selected.isEmpty ||
+            !_options(field).contains(selected) ||
+            (extra is Map && _text(extra[field['key']]) == selected);
       });
     }).toList();
 
-    return ColoredBox(
-      color: _bg,
-      child: RefreshIndicator(
-        onRefresh: load,
+    return Scaffold(
+      backgroundColor: _background,
+
+      // সব সেবার তালিকায় দৃশ্যমান; তালিকা খালি হলেও থাকবে।
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: FloatingActionButton.extended(
+        heroTag: null,
+        tooltip: _formTitle(widget.menu),
+        onPressed: _openForm,
+        backgroundColor: _blue,
+        foregroundColor: Colors.white,
+        elevation: 3,
+        icon: const Icon(Icons.add_rounded, size: 26),
+        label: const Text(
+          'তথ্য দিন',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+      ),
+
+      body: RefreshIndicator(
+        color: _blue,
+        onRefresh: _load,
         child: ListView.builder(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(14),
-          itemCount: list.length + 1,
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 100),
+          itemCount: filtered.length + 1,
           itemBuilder: (_, index) {
-            if (index == 0) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+            if (index > 0) return _contactCard(filtered[index - 1]);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _header(),
+                for (final field in fields)
+                  if (_options(field).isNotEmpty) _filterField(field),
+                const SizedBox(height: 16),
+                const Text(
+                  'যোগাযোগের তালিকা',
+                  style: TextStyle(
+                    color: _navy,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                if (_loading)
+                  const LinearProgressIndicator(color: _blue, minHeight: 2),
+                if (_error.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                    label: Text('$_error\nআবার চেষ্টা করুন'),
+                  ),
+                if (!_loading && _error.isEmpty && filtered.isEmpty)
                   Container(
+                    decoration: _cardDecoration(),
                     padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: _navy,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
+                    child: Column(
                       children: [
-                        if (_yes(widget.menu['hasIcon']))
-                          Image.network(
-                            ServiceApi.menuIcon(
-                              _id(widget.menu['id']),
-                              revision: _id(widget.menu['rev']),
-                            ).toString(),
-                            width: 36,
-                            height: 36,
-                            errorBuilder: (_, __, ___) => const Icon(
-                              Icons.contacts_outlined,
-                              color: Colors.white,
-                            ),
-                          )
-                        else
-                          const Icon(
-                            Icons.contacts_outlined,
-                            color: Colors.white,
-                            size: 30,
+                        const Icon(
+                          Icons.contact_phone_outlined,
+                          size: 30,
+                          color: _blue,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'এই নির্বাচনে কোনো প্রকাশিত তথ্য নেই।',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: _navy,
+                            fontWeight: FontWeight.w600,
                           ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${widget.menu['title']}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 21,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                widget.areas[widget.zone] ?? 'সকল ইউনিয়ন',
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                            ],
-                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _filters.values.any((v) => v.isNotEmpty)
+                              ? 'অন্য ফলাফল দেখতে ফিল্টারে “সব দেখুন” বেছে নিন।'
+                              : 'নতুন তথ্য পাঠাতে নিচের “＋ তথ্য দিন” চাপুন।',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: _muted),
                         ),
                       ],
                     ),
                   ),
-                  if (_yes(widget.menu['accept']))
-                    Padding(
-                      padding: const EdgeInsets.only(top: 10),
-                      child: FilledButton.icon(
-                        onPressed: add,
-                        icon: const Icon(Icons.add),
-                        label: const Text('সেবার তথ্য যোগ করুন'),
-                      ),
-                    ),
-                  for (final f in fields.where((f) => _options(f).isNotEmpty))
-                    DropdownButton<String>(
-                      isExpanded: true,
-                      value: _options(f).contains(filters[f['key']])
-                          ? filters[f['key']]
-                          : '',
-                      items: [
-                        DropdownMenuItem(
-                          value: '',
-                          child: Text("${f['label']}: সব"),
-                        ),
-                        for (final option in _options(f))
-                          DropdownMenuItem(value: option, child: Text(option)),
-                      ],
-                      onChanged: (v) => setState(
-                            () => filters['${f['key']}'] = v ?? '',
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  if (loading) const LinearProgressIndicator(minHeight: 2),
-                  if (error.isNotEmpty)
-                    TextButton.icon(
-                      onPressed: load,
-                      icon: const Icon(Icons.refresh),
-                      label: Text('$error · আবার চেষ্টা করুন'),
-                    ),
-                  if (!loading && error.isEmpty && list.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Text(
-                        'এই নির্বাচনে এখনো কোনো প্রকাশিত তথ্য নেই।',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                ],
-              );
-            }
-
-            final row = list[index - 1];
-            final phone = '${row['phone'] ?? ''}';
-
-            return Card(
-              color: Colors.white,
-              elevation: 0,
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                leading: avatar(row),
-                title: Text(
-                  '${row['name']}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  [areaOf(row), phone].where((s) => s.isNotEmpty).join('\n'),
-                ),
-                trailing: IconButton.filledTonal(
-                  tooltip: 'কল করুন',
-                  icon: const Icon(Icons.call_outlined),
-                  onPressed: phone.isEmpty
-                      ? null
-                      : () => openExternal(Uri(scheme: 'tel', path: phone)),
-                ),
-                onTap: () => details(row),
-              ),
+              ],
             );
           },
         ),
@@ -402,56 +597,51 @@ class _ServiceListState extends State<ServiceListPanel> {
   }
 }
 
+// ───────────────────── আবেদন ফর্ম ─────────────────────
+
 class _SubmissionPage extends StatefulWidget {
   const _SubmissionPage({
     required this.menu,
-    required this.areas,
     required this.zone,
+    required this.areas,
   });
 
-  final _J menu;
-  final Map<int, String> areas;
+  final _Json menu;
   final int zone;
+  final Map<int, String> areas;
 
   @override
   State<_SubmissionPage> createState() => _SubmissionState();
 }
 
 class _SubmissionState extends State<_SubmissionPage> {
-  final key = GlobalKey<FormState>();
-  final extra = <String, String>{};
+  final _formKey = GlobalKey<FormState>();
+  final _extra = <String, String>{};
 
-  String name = '', phone = '', address = '', error = '';
-  int? zone;
-  Uint8List? photo;
-  bool consent = false, busy = false, picking = false;
+  String _name = '';
+  String _phone = '';
+  String _address = '';
+  String _error = '';
+
+  int? _zone;
+  Uint8List? _photo;
+  bool _consent = false;
+  bool _sending = false;
+  bool _picking = false;
 
   @override
   void initState() {
     super.initState();
-    zone = widget.areas.containsKey(widget.zone) ? widget.zone : null;
+    if (widget.zone > 0 && widget.areas.containsKey(widget.zone)) {
+      _zone = widget.zone;
+    }
   }
 
-  InputDecoration decoration(String title, IconData icon) => InputDecoration(
-    labelText: title,
-    prefixIcon: Icon(icon),
-    border: const OutlineInputBorder(),
-  );
-
-  String normalizePhone(String value) => value
-      .trim()
-      .replaceAllMapped(
-    RegExp('[০-৯]'),
-        (m) => '০১২৩৪৫৬৭৮৯'.indexOf(m[0]!).toString(),
-  )
-      .replaceAll(RegExp(r'[\s()-]'), '');
-
-  Future<void> pickPhoto() async {
-    if (picking || busy) return;
-
+  Future<void> _pickPhoto() async {
+    if (_sending || _picking) return;
     setState(() {
-      picking = true;
-      error = '';
+      _picking = true;
+      _error = '';
     });
 
     try {
@@ -461,16 +651,15 @@ class _SubmissionState extends State<_SubmissionPage> {
         maxHeight: 192,
         imageQuality: 80,
       );
-
       if (file == null) return;
 
       if (await file.length() > 4000000) {
-        throw const FormatException('আরেকটি ছোট ছবি বাছুন।');
+        throw const FormatException('৪ MB-এর মধ্যে একটি ছবি বেছে নিন।');
       }
 
       final decoded = img.decodeImage(await file.readAsBytes());
       if (decoded == null) {
-        throw const FormatException('JPG অথবা PNG ছবি দিন।');
+        throw const FormatException('ছবিটি পড়া যায়নি। JPG বা PNG ছবি দিন।');
       }
 
       final thumb = img.copyResizeCropSquare(
@@ -478,164 +667,300 @@ class _SubmissionState extends State<_SubmissionPage> {
         size: 160,
       );
 
-      var bytes = img.encodeJpg(thumb, quality: 75);
-      if (bytes.length > 24000) {
-        bytes = img.encodeJpg(thumb, quality: 45);
+      Uint8List? jpeg;
+      for (final quality in [80, 65, 45, 30]) {
+        final bytes = img.encodeJpg(thumb, quality: quality);
+        if (bytes.length <= 24000) {
+          jpeg = Uint8List.fromList(bytes);
+          break;
+        }
       }
-      if (bytes.length > 24000) {
-        throw const FormatException('ছবিটি বেশি বড়। আরেকটি ছবি বাছুন।');
+      if (jpeg == null) {
+        throw const FormatException('ছবিটি বেশি বড়। অন্য ছবি বেছে নিন।');
       }
-
-      if (mounted) setState(() => photo = Uint8List.fromList(bytes));
+      if (mounted) setState(() => _photo = jpeg);
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
+      if (mounted) setState(() => _error = '$e');
     } finally {
-      if (mounted) setState(() => picking = false);
+      if (mounted) setState(() => _picking = false);
     }
   }
 
-  Future<void> send() async {
-    if (busy || picking || !key.currentState!.validate()) return;
+  Future<void> _send() async {
+    if (_sending || _picking) return;
+    FocusScope.of(context).unfocus();
 
-    if (!consent) {
-      setState(() => error = 'প্রকাশের সম্মতি দিন।');
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (!_consent) {
+      setState(() => _error = 'তথ্য প্রকাশের সম্মতি নিশ্চিত করুন।');
+      return;
+    }
+
+    final zone = _zone;
+    if (zone == null || zone < 1) {
+      setState(() => _error = 'সেবার ইউনিয়ন বেছে নিন।');
       return;
     }
 
     setState(() {
-      busy = true;
-      error = '';
+      _sending = true;
+      _error = '';
     });
 
     try {
-      await ServiceApi.submit(
+      final receipt = await ServiceApi.submit(
         menuId: _id(widget.menu['id']),
-        name: name.trim(),
-        phone: normalizePhone(phone),
-        areaIds: [zone!],
-        consent: true,
-        extra: extra,
-        address: address.trim(),
-        photoBase64: photo == null ? null : base64Encode(photo!),
+        name: _name.trim(),
+        phone: _normalizePhone(_phone),
+        areaIds: [zone],
+        consent: _consent,
+        extra: Map<String, String>.from(_extra),
+        address: _address.trim(),
+        photoBase64: _photo == null ? null : base64Encode(_photo!),
       );
 
-      if (mounted) Navigator.pop(context, true);
+      if (mounted) Navigator.of(context).pop(receipt);
     } catch (e) {
-      if (mounted) setState(() => error = '$e');
-    } finally {
-      if (mounted) setState(() => busy = false);
+      if (!mounted) return;
+      setState(() {
+        _sending = false;
+        _error = '$e';
+      });
     }
+  }
+
+  Widget _section(String title, List<Widget> children) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: _navy,
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  Widget _extraField(_Json field) {
+    final key = _text(field['key']);
+    final label = _text(field['label']);
+    final options = _options(field);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: options.isEmpty
+          ? TextFormField(
+        enabled: !_sending,
+        maxLength: 120,
+        decoration: _input(label, Icons.notes_outlined),
+        onChanged: (v) => _extra[key] = v.trim(),
+      )
+          : DropdownButtonFormField<String>(
+        isExpanded: true,
+        decoration: _input(label, Icons.list_alt),
+        items: [
+          for (final option in options)
+            DropdownMenuItem(value: option, child: Text(option)),
+        ],
+        onChanged: _sending ? null : (v) => _extra[key] = v ?? '',
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final zones = widget.areas.entries.where((e) => e.key > 0);
+    final fields = _rows(widget.menu['fields']);
+
     return PopScope(
-      canPop: !busy,
+      canPop: !_sending,
       child: Scaffold(
-        appBar: AppBar(title: const Text('সেবার তথ্য যোগ করুন')),
+        backgroundColor: _background,
+        appBar: AppBar(
+          backgroundColor: _navy,
+          foregroundColor: Colors.white,
+          title: Text(_formTitle(widget.menu)),
+        ),
         body: SafeArea(
           child: Form(
-            key: key,
+            key: _formKey,
             child: ListView(
-              padding: const EdgeInsets.all(18),
+              padding: const EdgeInsets.all(14),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               children: [
-                Text(
-                  '${widget.menu['title']}',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const Text('তথ্য যাচাইয়ের পর প্রকাশ করা হবে।'),
-                const SizedBox(height: 16),
-                Center(
-                  child: CircleAvatar(
-                    radius: 38,
-                    backgroundImage: photo == null ? null : MemoryImage(photo!),
-                    child: photo == null
-                        ? const Icon(Icons.person_outline, size: 36)
-                        : null,
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: _paleBlue,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    '${_text(widget.menu['title'])} · '
+                        'অ্যাডমিন যাচাই করার পর তথ্যটি প্রকাশ হবে।',
+                    style: const TextStyle(color: _navy),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: busy || picking ? null : pickPhoto,
-                  icon: const Icon(Icons.add_a_photo_outlined),
-                  label: Text(
-                    picking
-                        ? 'ছবি প্রস্তুত হচ্ছে…'
-                        : photo == null
-                        ? 'প্রোফাইল ছবি বাছুন (ঐচ্ছিক)'
-                        : 'ছবি বদলান',
+
+                _section('যোগাযোগের তথ্য', [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 26,
+                        backgroundColor: _paleBlue,
+                        backgroundImage:
+                        _photo == null ? null : MemoryImage(_photo!),
+                        child: _photo == null
+                            ? const Icon(Icons.person_outline, color: _blue)
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextButton.icon(
+                          onPressed: _sending || _picking ? null : _pickPhoto,
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                          label: Text(
+                            _picking
+                                ? 'ছবি প্রস্তুত হচ্ছে…'
+                                : _photo == null
+                                ? 'ছবি দিন (ঐচ্ছিক)'
+                                : 'ছবি বদলান',
+                          ),
+                        ),
+                      ),
+                      if (_photo != null)
+                        IconButton(
+                          tooltip: 'ছবি বাদ দিন',
+                          onPressed: _sending || _picking
+                              ? null
+                              : () => setState(() => _photo = null),
+                          icon: const Icon(Icons.close),
+                        ),
+                    ],
                   ),
-                ),
-                TextFormField(
-                  maxLength: 100,
-                  decoration: decoration('ব্যক্তি / প্রতিষ্ঠানের নাম', Icons.badge_outlined),
-                  onChanged: (v) => name = v,
-                  validator: (v) =>
-                  (v ?? '').trim().length < 2 ? 'পুরো নাম লিখুন' : null,
-                ),
-                TextFormField(
-                  maxLength: 20,
-                  keyboardType: TextInputType.phone,
-                  decoration: decoration('মোবাইল নম্বর', Icons.phone_outlined),
-                  onChanged: (v) => phone = v,
-                  validator: (v) =>
-                  RegExp(r'^(?:\+88)?01[3-9][0-9]{8}$')
-                      .hasMatch(normalizePhone(v ?? ''))
-                      ? null
-                      : 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন',
-                ),
-                DropdownButtonFormField<int>(
-                  initialValue: zone,
-                  isExpanded: true,
-                  decoration: decoration('সেবার ইউনিয়ন', Icons.place_outlined),
-                  items: [
-                    for (final e in widget.areas.entries)
-                      DropdownMenuItem(value: e.key, child: Text(e.value)),
-                  ],
-                  onChanged: (v) => setState(() => zone = v),
-                  validator: (v) => v == null ? 'ইউনিয়ন নির্বাচন করুন' : null,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  maxLength: 180,
-                  decoration: decoration('সেবার স্থান / বাজার / স্ট্যান্ড', Icons.map_outlined),
-                  onChanged: (v) => address = v,
-                  validator: (v) =>
-                  (v ?? '').trim().isEmpty ? 'সেবার ঠিকানা লিখুন' : null,
-                ),
-                for (final f in _rows(widget.menu['fields']))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _options(f).isEmpty
-                        ? TextFormField(
-                      maxLength: 120,
-                      decoration: decoration('${f['label']}', Icons.notes),
-                      onChanged: (v) => extra['${f['key']}'] = v.trim(),
-                    )
-                        : DropdownButtonFormField<String>(
-                      isExpanded: true,
-                      decoration: decoration('${f['label']}', Icons.list),
-                      items: [
-                        for (final option in _options(f))
-                          DropdownMenuItem(value: option, child: Text(option)),
-                      ],
-                      onChanged: (v) => extra['${f['key']}'] = v ?? '',
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    enabled: !_sending,
+                    maxLength: 100,
+                    textInputAction: TextInputAction.next,
+                    decoration: _input(
+                      'ব্যক্তি / প্রতিষ্ঠানের নাম',
+                      Icons.badge_outlined,
                     ),
+                    onChanged: (v) => _name = v,
+                    validator: (v) =>
+                    _text(v).length < 2 ? 'পুরো নাম লিখুন।' : null,
                   ),
+                  TextFormField(
+                    enabled: !_sending,
+                    maxLength: 20,
+                    keyboardType: TextInputType.phone,
+                    decoration: _input(
+                      'মোবাইল নম্বর',
+                      Icons.phone_outlined,
+                      hint: '01XXXXXXXXX',
+                    ),
+                    onChanged: (v) => _phone = v,
+                    validator: (v) {
+                      final phone = _normalizePhone(v ?? '');
+                      return RegExp(r'^(?:\+88)?01[3-9][0-9]{8}$')
+                          .hasMatch(phone)
+                          ? null
+                          : 'সঠিক বাংলাদেশি মোবাইল নম্বর দিন।';
+                    },
+                  ),
+                ]),
+
+                _section('সেবার এলাকা', [
+                  DropdownButtonFormField<int>(
+                    initialValue: _zone,
+                    isExpanded: true,
+                    decoration: _input('ইউনিয়ন', Icons.place_outlined),
+                    items: [
+                      for (final zone in zones)
+                        DropdownMenuItem(
+                          value: zone.key,
+                          child: Text(zone.value),
+                        ),
+                    ],
+                    onChanged: _sending
+                        ? null
+                        : (v) => setState(() => _zone = v),
+                    validator: (v) =>
+                    v == null || v < 1 ? 'ইউনিয়ন বেছে নিন।' : null,
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    enabled: !_sending,
+                    maxLength: 180,
+                    decoration: _input(
+                      'সেবার স্থান / বাজার / স্ট্যান্ড',
+                      Icons.map_outlined,
+                    ),
+                    onChanged: (v) => _address = v,
+                    validator: (v) =>
+                    _text(v).isEmpty ? 'সেবার স্থানের নাম লিখুন।' : null,
+                  ),
+                ]),
+
+                if (fields.isNotEmpty)
+                  _section('সেবার বিস্তারিত', [
+                    for (final field in fields) _extraField(field),
+                  ]),
+
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
-                  value: consent,
-                  onChanged: busy ? null : (v) => setState(() => consent = v ?? false),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  activeColor: _blue,
+                  value: _consent,
+                  onChanged: _sending
+                      ? null
+                      : (v) => setState(() {
+                    _consent = v ?? false;
+                    _error = '';
+                  }),
                   title: const Text(
-                    'নাম, মোবাইল, ছবি ও সেবার ঠিকানা প্রকাশে সংশ্লিষ্ট ব্যক্তির সম্মতি আছে।',
+                    'যাঁর তথ্য দিচ্ছি, তাঁর নাম, নম্বর, ছবি ও দেওয়া তথ্য '
+                        'প্রকাশে তাঁর সম্মতি আছে।',
+                    style: TextStyle(color: _navy, fontSize: 14),
                   ),
                 ),
-                if (error.isNotEmpty)
-                  Text(error, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                const SizedBox(height: 8),
+
+                if (_error.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        _error,
+                        style: const TextStyle(color: Color(0xFFA12632)),
+                      ),
+                    ),
+                  ),
+
                 FilledButton.icon(
-                  onPressed: busy || picking ? null : send,
-                  icon: const Icon(Icons.send_outlined),
-                  label: Text(busy ? 'জমা হচ্ছে…' : 'যাচাইয়ের জন্য জমা দিন'),
+                  style: _primaryButton(),
+                  onPressed: _sending || _picking ? null : _send,
+                  icon: _sending
+                      ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                      : const Icon(Icons.send_outlined),
+                  label: Text(
+                    _sending ? 'জমা হচ্ছে…' : 'যাচাইয়ের জন্য জমা দিন',
+                  ),
                 ),
               ],
             ),
